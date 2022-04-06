@@ -40,13 +40,13 @@ struct mut_input {
     unsigned int cs_is_not_ss : 1;         // NOTUSED
     unsigned int dont_align : 1;           // paragraph boundary alignment
   } flags;                                 // ax
-} *in;
+} * in;
 struct mut_output {
   uint8_t *code;               // ds:dx
   unsigned int len;            // ax
   uint8_t *routine_end_offset; // di
   uint8_t *loop_offset;        // si
-} *out;
+} * out;
 // }}}
 
 // {{{
@@ -261,39 +261,47 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
   case 1:
     // making loop
     {
-    uint8_t *patch1,*patch2;
-    phase--;
-    emit_mov(ptr_reg, in->len);
-    patch1 = out->code;
-    phase++;
-    emit_ops();
-    if (generating_enc()) { emitb(0xcb); break; }
-    phase = -1;
-    if (ptr_reg & 0x80) {
-      // did we only encode a move?
-      if (out->code == decrypt_stage + 5) {
-        out->code -= 5;
-        reg_set_dec[ptr_reg]--;
+      uint8_t *patch1, *patch2;
+      phase--;
+      emit_mov(ptr_reg, in->len);
+      patch1 = out->code;
+      phase++;
+      emit_ops();
+      if (generating_enc()) {
+        emitb(0xcb);
+        break;
       }
-    }
-    *out->code = 0xcb; // retf
+      phase = -1;
+      if (ptr_reg & 0x80) {
+        // did we only encode a move?
+        if (out->code == decrypt_stage + 5) {
+          out->code -= 5;
+          reg_set_dec[ptr_reg]--;
+        }
+      }
+      *out->code = 0xcb; // retf
 
-    generate_code(MUT_ROUTINE_SIZE_MEDIUM);
-    // TODO pushes (L939)
-    // offset patching (L986)
-    patch2=op_off_patch;
-    if (in->entry_offset != 0) { patch1+=5; patch2+=5; }
-    if (in->payload_offset == 0) {
-      patch1+=in->exec_offset;
-      patch2+=in->exec_offset;
-    }
-    uint8_t hold = out->code;
-    out->code = patch1;
-    emitd(in->len);
-    out->code = patch2;
-    emitd(in->len);
-    out->code = hold;
-    break;
+      // outro junk
+      generate_code(MUT_ROUTINE_SIZE_MEDIUM);
+
+      // TODO pushes (L939)
+      // offset patching (L986)
+      patch2 = op_off_patch;
+      if (in->entry_offset != 0) {
+        patch1 += 5;
+        patch2 += 5;
+      }
+      if (in->payload_offset == 0) {
+        patch1 += in->exec_offset;
+        patch2 += in->exec_offset;
+      }
+      uint8_t hold = out->code;
+      out->code = patch1;
+      emitd(in->len);
+      out->code = patch2;
+      emitd(in->len);
+      out->code = hold;
+      break;
     }
   default:
     // intro junk
