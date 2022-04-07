@@ -59,7 +59,24 @@ uintptr_t jnz_patch_hits[0x21];
 uintptr_t jnz_patch_enc[0x21];
 // }}}
 
-uint8_t ops[0x21];
+enum op_t {
+  OP_DATA,
+  OP_START_OR_END,
+  OP_POINTER,
+  OP_SUB,
+  OP_ADD,
+  OP_XOR,
+  OP_MUL,
+  OP_ROL,
+  OP_ROR,
+  OP_SHL,
+  OP_SHR,
+  OP_OR,
+  OP_AND,
+  OP_IMUL,
+  OP_JNZ
+};
+enum op_t ops[0x21];
 uint32_t ops_args[0x21];
 
 // bp = size_neg => intro junk
@@ -69,6 +86,8 @@ uint32_t ops_args[0x21];
 long int phase = 0;
 uint8_t op_idx = 1, op_free_idx = 1, op_next_idx = 1, op_end_idx;
 uint8_t *op_off_patch;
+uint8_t patch_dummy[4];
+uint8_t *loop_start;
 
 static void make_ops_table(enum mut_routine_size_t routine_size) {
 
@@ -203,24 +222,44 @@ static void emit_mov_imm(uint8_t reg, uint32_t val) {
 }
 // phase -1,0,1,size
 static int emit_mov_reg(uint8_t a, uint8_t b) {
-  if (phase == 1) {
-    phase = (long int)(out->code + 1);
-    return 0;
-  }
   if (a == b)
-    return 1;
+    return 0;
   if (phase == 0 && generating_dec() && (a == REG_AX || b == REG_AX)) {
     // ... optimize to XCHG AX,reg
     uint8_t reg = (a + b) - REG_AX;
     if (reg != ptr_reg) {
       emitb(0x90 | reg);
-      return 1;
+      return 0;
     }
   }
+  // MOV REG,imm
+  if ((b & 0xff) == 0) { return 0; }
+  // MOV REG,[ptr+off16]
+  // MOV [ptr+off16],REG
   // MOV REG,REG
   emitb(0x8b);
-  emitb(0xc0 | (a << 3) | b); // XXX order
-  return 1;
+  if (b & 0x80) {
+    // ptr
+    b = (ptr_reg << 8) | (b & 0xff);
+    if (++phase == 0) {
+      phase--;
+      emitb(0xc0 | (a << 3) | b);
+      return 0;
+    }
+    if (--phase != 0) {
+      int rv = phase;
+      phase = (long int)(out->code)+1;
+      return rv;
+    }
+    emitb((a << 3) | b);
+    op_off_patch = out->code;
+    emitd(0); // offset to patch
+    return 0;
+  } else {
+    // reg
+    emitb(0xc0 | (a << 3) | b); // XXX order
+    return 0;
+  }
 }
 // lower byte of val == 0 then encode mov reg,reg instead
 static void emit_mov(uint8_t reg, uint32_t val) {
@@ -230,16 +269,45 @@ static void emit_mov(uint8_t reg, uint32_t val) {
   if (val & 0xff) {
     emit_mov_imm(reg, val);
   } else {
-    if (!emit_mov_reg(reg, (val >> 8))) {
+    if ((val = emit_mov_reg(reg, (val >> 8)))) {
+      // XXX val is the phase returned by emit_mov_reg
       emit_mov_imm(reg, val);
     }
   }
 }
 static void emit_mov_data(uint32_t val) { emit_mov(data_reg, val); }
 static int generate_code_from_table(enum mut_routine_size_t);
+// XXX takes bl=routine_size, dx=?, di=buf 
 static void generate_code(enum mut_routine_size_t routine_size) {
   make_ops_table(routine_size);
   generate_code_from_table(routine_size);
+}
+static int try_ptr_advance() {
+  uint32_t bump = -2;
+  int rv = 0;
+
+  if (ops[op_idx] != OP_SUB && ops[op_idx] != OP_ADD)
+    return rv;
+  if (ops[op_idx] == OP_ADD)
+    bump = 2;
+
+  // XXX 0 is... OP_DATA?
+  if (ops[(ops_args[op_idx] >> 8) & 0xff] == 0) {
+    bump += ops_args[ops_args[op_idx] >> 8];
+    if ((bump & 0xff) != 0) {
+      ops_args[ops_args[op_idx] >> 8] = bump;
+      rv--;
+    }
+  }
+  bump = 2;
+  if (ops[ops_args[op_idx] & 0xff] == 0) {
+    bump += ops_args[ops_args[op_idx] & 0xff];
+    if ((bump & 0xff) != 0) {
+      ops_args[ops_args[op_idx] & 0xff] = bump;
+      rv--;
+    }
+  }
+  return rv;
 }
 static void invert_ops_table() {}
 static int generate_code_from_table(enum mut_routine_size_t routine_size) {
@@ -257,7 +325,73 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
     break;
   case 0:
     // making loop end and outro junk
-    break;
+    {
+      emit_ops();
+      phase--;
+      uint8_t *hold = op_off_patch;
+      op_off_patch = patch_dummy;
+      int need_increment_ptr = 1;
+      if (generating_dec()) {
+        phase++;
+        // 1x 11x 111
+        // ^  ^   `-  want 7 (bx+disp16)
+        // |  `-      want 0 or 1 (XXX unsure, prob from low 3 shifted)
+        // `-         imm16, 0x40 means op was sub
+        if ((last_op_flag & 0xb7) == 0x87 && in->payload_offset == 0) {
+          // if we generated xor/add/sub, flip direction
+          *(out->code - 6) ^= 2;
+          last_op_flag <<= 1;
+          if (last_op_flag & 0x80) {
+            // emit a neg too
+            emitb(0xf7);
+            emitb(3);
+            op_off_patch = out->code;
+            emitw(0);
+          }
+        }
+        phase--;
+
+        in->routine_size >>= 1;
+        generate_code(in->routine_size);
+        invert_ops_table();
+        need_increment_ptr = try_ptr_advance() == 0;
+        generate_code_from_table(in->routine_size);
+
+        emit_mov(ptr_reg, data_reg); // XXX mov [ptr+off],data
+      }
+      if (need_increment_ptr) {
+        emitb(0x40 | ptr_reg);
+        emitb(0x40 | ptr_reg);
+      }
+      emitb(0x75);
+      int8_t delta = out->code - loop_start + 2;
+      if (delta >= 0) {
+        return 0;
+      }
+      emitb(delta);
+      //emitb(0xc3);
+      *out->code = 0xc3;
+
+      if (generating_dec()) {
+        in->routine_size = MUT_ROUTINE_SIZE_MEDIUM;
+        generate_code(in->routine_size);
+        // TODO pushes
+        // TODO adjust offsets (L987)
+      }
+
+      // patch offsets
+      uintptr_t target = (uintptr_t)out->code;
+      target -= in->len;
+      hold[0] = (long int)target;
+      hold[1] = (long int)target>>8;
+      hold[2] = (long int)target>>16;
+      hold[3] = (long int)target>>24;
+      op_off_patch[0] = (long int)target;
+      op_off_patch[1] = (long int)target>>8;
+      op_off_patch[2] = (long int)target>>16;
+      op_off_patch[3] = (long int)target>>24;
+      return 0;
+    }
   case 1:
     // making loop
     {
@@ -268,7 +402,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
       phase++;
       emit_ops();
       if (generating_enc()) {
-        emitb(0xcb);
+        emitb(0xc3);
         break;
       }
       phase = -1;
@@ -279,12 +413,13 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
           reg_set_dec[ptr_reg]--;
         }
       }
-      *out->code = 0xcb; // retf
+      *out->code = 0xc3; // retf
 
       // outro junk
       generate_code(MUT_ROUTINE_SIZE_MEDIUM);
 
       // TODO pushes (L939)
+
       // offset patching (L986)
       patch2 = op_off_patch;
       if (in->entry_offset != 0) {
@@ -295,19 +430,21 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
         patch1 += in->exec_offset;
         patch2 += in->exec_offset;
       }
-      uint8_t hold = out->code;
+      uint8_t *hold = out->code;
       out->code = patch1;
-      emitd(in->len);
+      emitd(in->len); // XXX
       out->code = patch2;
-      emitd(in->len);
+      emitd(in->len); // XXX
       out->code = hold;
+
+      phase = out->len;
       break;
     }
   default:
     // intro junk
     emit_ops();
     emitb(0x90 | data_reg); // xchg ax,reg
-    emitb(0xcb);            // retf
+    emitb(0xc3);            // retf
     phase = 0;
     break;
   }
@@ -316,21 +453,20 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
 }
 
 static int make(uint8_t *p, enum mut_routine_size_t routine_size) {
-
-  // code
   generate_code(routine_size);
-
-  // mirror
   invert_ops_table();
   return generate_code_from_table(routine_size);
 }
 
-static uint32_t exec_enc_stage(uint32_t init_val) { return 0; }
+static uint32_t exec_enc_stage(uint32_t init_val) {
+  // TODO
+  return 0;
+}
 
 static void make_enc_and_dec(struct mut_input *in, struct mut_output *out) {
 
   // round onto a word boundary, but not a page boundary
-  in->len += MAX_ADD_LEN - 3; // XXX holding 3 bytes for JMP?
+  in->len += MAX_ADD_LEN - 5; // XXX holding 3 bytes for JMP?
   in->len = -in->len;
   in->len = (in->len & 0xfe) == 0 ? (in->len & 0xfffe) - 2 : in->len & 0xfffe;
 
