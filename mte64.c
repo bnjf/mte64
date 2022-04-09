@@ -13,9 +13,6 @@
 // 1394-(0x21+0x42+0x42+0x42+0x42+19+16+1+1+1+1+2+7+(512*2))=0
 // static const int MAX_LEN = 1394;
 
-static void emit_mov_data(uint32_t);
-static void emitb(uint8_t);
-
 // {{{
 enum mut_routine_size_t {
   MUT_ROUTINE_SIZE_TINY = (2 << 0) - 1,
@@ -44,23 +41,29 @@ struct mut_input {
     unsigned int cs_is_not_ss : 1;         // NOTUSED
     unsigned int dont_align : 1;           // paragraph boundary alignment
   } flags;                                 // ax
-} * in;
+};
 struct mut_output {
   uint8_t *code;               // ds:dx
   unsigned int len;            // ax
   uint8_t *routine_end_offset; // di
   uint8_t *loop_offset;        // si
-} * out;
+};
+static void emit_mov(uint8_t, uint32_t);
+static void emit_mov_data(uint32_t);
+static void emitb(uint8_t);
+static int generate_code_from_table(enum mut_routine_size_t);
 // }}}
 
 // {{{
+static struct mut_input *in;
+static struct mut_output *out;
 static uint8_t reg_set_dec[8];
 static uint8_t reg_set_enc[8];
-uint8_t decrypt_stage[MAX_ADD];
-uint8_t encrypt_stage[MAX_ADD];
-uintptr_t jnz_patch_dec[0x21];
-uintptr_t jnz_patch_hits[0x21];
-uintptr_t jnz_patch_enc[0x21];
+static uint8_t decrypt_stage[MAX_ADD];
+static uint8_t encrypt_stage[MAX_ADD];
+static uintptr_t jnz_patch_dec[0x21];
+static uintptr_t jnz_patch_hits[0x21];
+static uintptr_t jnz_patch_enc[0x21];
 // }}}
 
 enum op_t {
@@ -170,7 +173,7 @@ uint8_t data_reg;
 #define REG_IS_USED 0
 #define REG_IS_FREE 0xff
 
-uint8_t last_op;
+uint8_t last_op; // 0,0x8a,0xf7,0xc1,-1
 uint8_t last_op_flag;
 
 static uint8_t pick_registers(uint8_t op) {
@@ -250,12 +253,17 @@ static int generating_enc() {
 static int generating_dec() { return !generating_enc(); }
 static void bl_op_reg_mrm(uint8_t op, uint8_t src, uint8_t dst) {
   emitb(op);
-  emitb(0xc0 | (src<<3) | dst);
+  emitb(0xc0 | (src << 3) | dst);
 }
 static uint16_t emit_ops(uint8_t i) {
-  uint8_t dx;
+  uint16_t dx;
 
-  last_op_flag=0x80;
+  /*
+   * 0=>ops_args[i]
+   * 1=>0xff00
+   * 2=>ptr_reg
+   */
+  last_op_flag = 0x80;
   last_op = 0xff;
   dx = 0xff00;
 
@@ -277,16 +285,80 @@ static uint16_t emit_ops(uint8_t i) {
   dx = emit_ops(UPPER(dx));
   // now cx has op_args[i]
 
+  // XXX what's emit_ops return in al?
+  // return 0,0xff00 if op == 1
+  // return 0,0x${ptr}00 if op == 2
+  // return -2,args if op == 0
   if (ops[i] == OP_JNZ) {
+    // move regN,data
+    // test data,data (if we haven't created an op)
+    // jnz over
+    // (rest of table)
+    // over:
     emit_mov_data(dx);
-    if (data_reg != UPPER(dx) || last_op != 0) {
-      // 0x85 => TEST
-      bl_op_reg_mrm(0x85, al, UPPER(dx));
-
+    if (UPPER(dx) != data_reg || last_op != 0) {
+      bl_op_reg_mrm(0x85, data_reg, UPPER(dx));
     }
+    emitb(0x75);
+    if (phase != -1) {
+      if (generating_enc()) {
+        // trap on jnz for the staged encrypter
+        *(out->code - 1) = 0xcc;
+      }
+      // XXX prob just jnz_patch_enc[i] = 0
+      jnz_patch_enc[i] = jnz_patch_dec[i];
+      jnz_patch_dec[i] = (uintptr_t)out->code;
+    }
+    emitb(0); // place holder
+    uint8_t *patch = out->code;
+    // stack: op_args[i], (op - 2)
+
+    // fill
+    uint16_t rv = emit_ops(LOWER(ops_args[i]));
+    // move next op's arg (reg) into data
+    emit_mov_data(rv);
+    last_op_flag = 0x80;
+    *(patch - 1) = out->code - patch;
+    return (data_reg << 8) | 0; // 0 -> OP_DATA?
   }
 
+  if (LOWER(dx) == 0 && UPPER(dx) == data_reg) {
+    uint8_t reg;
 
+    // pick a reg
+    if ((last_op_flag & 0x80) == 0 &&
+        ((last_op_flag & 7) == 0 ||
+         ((last_op_flag & 7) != ptr_reg && (last_op_flag & 7) >= REG_BX))) {
+      // flip the order of the last op
+      *(out->code - 2) ^= 2;
+      reg = last_op_flag;
+      if (last_op_flag & 0x40) {
+        // emit a NEG reg
+        emitb(0xf7);
+        emitb(0xd8 | last_op_flag);
+      }
+    } else {
+      reg = random();
+      int attempts = 8;
+      while (attempts-- && reg_set_enc[reg = (reg + 1) & 7] == REG_IS_USED) {
+        if (reg != REG_CX && (ops[i] & 0x80) != 0) {
+          emit_mov(reg, data_reg);
+          break;
+        }
+      }
+      if (attempts == 0) {
+        emitb(0x50 | reg);
+      }
+    }
+    reg_set_enc[reg] = REG_IS_USED;
+
+    uint16_t rv = emit_ops(LOWER(ops_args[i]));
+    // move next op's arg (reg) into data
+    emit_mov_data(rv);
+    last_op_flag = 0x80;
+
+    // TODO L1296
+  }
 }
 static void emitb(uint8_t x) { *(out->code++) = x; }
 static void emitw(uint16_t x) {
@@ -361,7 +433,6 @@ static void emit_mov(uint8_t reg, uint32_t val) {
   }
 }
 static void emit_mov_data(uint32_t val) { emit_mov(data_reg, val); }
-static int generate_code_from_table(enum mut_routine_size_t);
 // XXX takes bl=routine_size, dx=arg_size_neg, di=buf
 static void generate_code(enum mut_routine_size_t routine_size) {
   make_ops_table(routine_size);
