@@ -87,7 +87,20 @@ enum op_t {
   OP_IMUL,
   OP_JNZ
 };
+enum opcode_t {
+  OPCODE_OR = 0x0B,
+  OPCODE_AND = 0x23,
+  OPCODE_XOR = 0x33,
+  OPCODE_ADD = 0x03,
+  OPCODE_SUB = 0x2B,
+  OPCODE_MOV_IMM = 0xB8
+};
 #endif
+LOCAL uint8_t opcodes[] = {[OP_OR] = OPCODE_OR,
+                           [OP_AND] = OPCODE_AND,
+                           [OP_XOR] = OPCODE_XOR,
+                           [OP_ADD] = OPCODE_ADD,
+                           [OP_XOR] = OPCODE_XOR};
 LOCAL op_t ops[0x21];
 LOCAL uint32_t ops_args[0x21];
 
@@ -259,9 +272,9 @@ static int generating_enc() {
   return out->code >= decrypt_stage && out->code < decrypt_stage + MAX_ADD_LEN;
 }
 static int generating_dec() { return !generating_enc(); }
-static void bl_op_reg_mrm(uint8_t op, uint8_t src, uint8_t dst) {
+static uint8_t bl_op_reg_mrm(uint8_t op, uint8_t src, uint8_t dst) {
   emitb(op);
-  emitb(0xc0 | (src << 3) | dst);
+  return (emitb(0xc0 | (src << 3) | dst));
 }
 static uint16_t emit_ops(uint8_t i) {
   uint16_t dx;
@@ -379,7 +392,7 @@ static uint16_t emit_ops(uint8_t i) {
 #define SETLO(reg, val) (reg = UPPER(reg) | (val & 0xff))
 #define SETHI(reg, val) (reg = (val << 8) | LOWER(reg))
   if (dl == 0) {
-    uint8_t *reg_used = ((uint8_t*)&dx);
+    uint8_t *reg_used = ((uint8_t *)&dx);
     if (dh == 0x80) {
       // if we pushed
       switch (ops[i]) {
@@ -398,30 +411,104 @@ static uint16_t emit_ops(uint8_t i) {
       }
     }
     // ops[i] => (1,2)
-    //if (dh != 0x80 && (ops[i] != *reg_used)) {
+    // if (dh != 0x80 && (ops[i] != *reg_used)) {
     if (*reg_used >= 0x80) {
       // if we didn't push, and the op is
       //   start and we didn't use cx
       //   pointer and didn't use dx
       switch (*reg_used) {
-        case REG_CX:
-          // rotates/shifts during arith ops (we don't need the shift count
-          // anymore)
-          if (ops[i] == OP_START_OR_END) reg_set_enc[REG_CX] = REG_IS_FREE;
-          break;
-        case REG_DX:
-          // mul inside of pointer ops (we always set dx prior, and we don't
-          // use part of the result later)
-          if (ops[i] == OP_POINTER) reg_set_enc[REG_DX] = REG_IS_FREE;
-          break;
+      case REG_CX:
+        // rotates/shifts during arith ops (we don't need the shift count
+        // anymore)
+        if (ops[i] == OP_START_OR_END)
+          reg_set_enc[REG_CX] = REG_IS_FREE;
+        break;
+      case REG_DX:
+        // mul inside of pointer ops (we always set dx prior, and we don't
+        // use part of the result later)
+        if (ops[i] == OP_POINTER)
+          reg_set_enc[REG_DX] = REG_IS_FREE;
+        break;
       }
     }
   }
 
-  uint8_t opcode = 0;
+  if (ops[i] == OP_MUL || ops[i] == OP_IMUL) {
+    uint8_t f7_op = 4;
+    if (ops[i] == OP_IMUL) {
+      f7_op = 5; // cl
+    }
+    if (dl != 0) {
+      emitb(OPCODE_MOV_IMM | REG_DX);
+      emitd(ops_args[i]);
+      dx = 0x02BA;
+    }
+    last_op = 0xf7;
+    if (dh & 0x80) {
+      // reg,reg operation
+      emitb(0xf7);
+      // MUL/IMUL
+      emitb(0xc0 | (f7_op << 3) | data_reg);
+    } else {
+      // phase change!
+      // size_neg (pointer) -> out_code
+      // used for recording the start of the loop
+      dx = phase;
+      phase = (uintptr_t)out->code;
+
+      if (phase == -1) {
+      }
+    }
+  }
 }
 
-static void emitb(uint8_t x) { *(out->code++) = x; }
+static void encode_mrm(uint16_t dx, opcode_t op, uint8_t reg) {
+  if (dh & 0x80 == 0 || phase == -1) {
+    // doing reg,reg ops.  in phase -1 we pick ptr_reg
+    if (phase == -1) {
+      SETHI(dx, ptr_reg);
+    }
+    emitb(op);
+    emitb(0xc0 | (reg << 3) | dh);
+    return;
+  }
+  if (phase != 0) {
+    dx = (uintptr_t)out->code;
+    phase = (uintptr_t)out->code + 1;
+    // carry set
+    return;
+  }
+  // otherwise it's <op> [ptr_reg+offset]
+  // the original code had logic for segment overrides, but these aren't
+  // relevant for us
+  emitb(op);
+  emitb(dh | (reg << 3) | ptr_reg);
+  op_off_patch = out->code;
+}
+
+static void encode_mrm_ptr(opcode_t op, uint8_t reg1) {}
+
+LOCAL uint8_t is_8086 = 0;
+static uint8_t emit_op_mrm(opcode_t op, uint8_t reg1, uint8_t reg2) {
+  if (reg1 == reg2) {
+    return reg1;
+  }
+  // dec somewhere
+  if (is_8086 != 0xff) {
+    return bl_op_reg_mrm(op, reg1, reg2);
+  }
+  if (reg1 == REG_AX || reg2 == REG_AX) {
+    uint8_t reg_used = reg1 + reg2 - REG_AX;
+    if (phase == 0 || reg_used != ptr_reg) {
+      emitb(0x90 | (reg1 + reg2 - REG_AX));
+      return reg1;
+    }
+  } else {
+    return bl_op_reg_mrm(op, reg1, reg2);
+  }
+}
+
+static uint8_t emitb(uint8_t x) { return *(out->code++) = x; }
 static void emitw(uint16_t x) {
   *(out->code++) = x >> 8;
   *(out->code++) = x;
@@ -552,7 +639,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
         }
         bx = 0xff00;
         *out->code = 0xc3;
-        return (long int)pre_emit_loc; // XXX 
+        return (long int)pre_emit_loc; // XXX
       }
       // XXX if we only made a move?
       if (pre_emit_loc == decrypt_stage + 5) {
@@ -560,7 +647,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
         out->code -= 5;
         reg_set_dec[ptr_reg] = REG_IS_FREE;
       }
-      bx = (uint16_t) &patch_dummy; // XXX bogus
+      bx = (uint16_t)&patch_dummy; // XXX bogus
       goto size_ok;
     }
     break;
