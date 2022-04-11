@@ -88,14 +88,25 @@ enum op_t {
   OP_JNZ
 };
 enum opcode_t {
+  OPCODE_ADD = 0x03,
   OPCODE_OR = 0x0B,
   OPCODE_AND = 0x23,
-  OPCODE_XOR = 0x33,
-  OPCODE_ADD = 0x03,
   OPCODE_SUB = 0x2B,
+  OPCODE_XOR = 0x33,
   OPCODE_MOV_IMM = 0xB8
 };
+enum opcode_f7_t {
+  OPCODE_F7_TEST_IMM,
+  OPCODE_F7_TEST_IMM_ALT,
+  OPCODE_F7_NOT,
+  OPCODE_F7_NEG,
+  OPCODE_F7_MUL,
+  OPCODE_F7_IMUL,
+  OPCODE_F7_DIV,
+  OPCODE_F7_IDIV
+};
 #endif
+
 LOCAL uint8_t opcodes[] = {[OP_OR] = OPCODE_OR,
                            [OP_AND] = OPCODE_AND,
                            [OP_XOR] = OPCODE_XOR,
@@ -104,7 +115,8 @@ LOCAL uint8_t opcodes[] = {[OP_OR] = OPCODE_OR,
 LOCAL op_t ops[0x21];
 LOCAL uint32_t ops_args[0x21];
 
-// bp = size_neg => intro junk
+// bp = size_neg => intro junk (sign bit!)
+//    loop_start => move+crypt ops
 //      1        => making loop
 //      0        => making decryptor loop end+outro
 //     -1        => only when called recursively
@@ -116,6 +128,20 @@ LOCAL uint8_t op_end_idx;
 LOCAL uint8_t *op_off_patch;
 LOCAL uint8_t patch_dummy[4];
 LOCAL uint8_t *loop_start;
+
+LOCAL uint32_t ax, cx, dx, bx, sp, bp, si, di;
+#define al (GETLO(ax))
+#define ah (GETHI(ax))
+#define cl (GETLO(cx))
+#define ch (GETHI(cx))
+#define dl (GETLO(dx))
+#define dh (GETHI(dx))
+#define bl (GETLO(bx))
+#define bh (GETHI(bx))
+#define GETLO(reg) ((reg)&0xff)
+#define GETHI(reg) (GETLO(((reg) >> 8)))
+#define SETLO(reg, val) (reg = UPPER(reg) | ((val)&0xff))
+#define SETHI(reg, val) (reg = ((val) << 8) | LOWER(reg))
 
 static void make_ops_table(enum mut_routine_size_t routine_size) {
 
@@ -222,6 +248,8 @@ static uint8_t pick_registers(uint8_t op) {
 }
 #define LOWER(x) ((x)&0xff)
 #define UPPER(x) LOWER(((x) >> 8))
+
+// checks for any pending register allocations
 static uint32_t get_op_args(uint8_t i) {
   uint32_t x, y;
 
@@ -272,9 +300,29 @@ static int generating_enc() {
   return out->code >= decrypt_stage && out->code < decrypt_stage + MAX_ADD_LEN;
 }
 static int generating_dec() { return !generating_enc(); }
+
+// emits an op and a REG,REG MRM
+// if the op is 0xF7, src is:
+//   0,1  TEST r/m,imm8/16
+//   2    NOT  r/m
+//   3    NEG  r/m
+//   4    MUL  r/m
+//   5    IMUL r/m
+//   6    DIV  r/m (not generated)
+//   7    IDIV r/m (not generated)
+static uint8_t encode_mrm_dh_s(uint8_t op, uint8_t src, uint8_t dst) {
+  if (dst & 0x80) {
+    return encode_mrm_ptr(op, src);
+  }
+  return emit_op_mrm(op, src, dst);
+}
 static uint8_t bl_op_reg_mrm(uint8_t op, uint8_t src, uint8_t dst) {
+  return encode_op_mrm(op, 3, src, dst);
+}
+static uint8_t encode_op_mrm(uint8_t op, uint8_t mode, uint8_t src,
+                             uint8_t dst) {
   emitb(op);
-  return (emitb(0xc0 | (src << 3) | dst));
+  return (emitb((mode << 6) | (src << 3) | dst));
 }
 static uint16_t emit_ops(uint8_t i) {
   uint16_t dx;
@@ -385,12 +433,6 @@ static uint16_t emit_ops(uint8_t i) {
   emit_mov_data(rv);
   last_op_flag = 0x80;
   // @@op_not_jnz
-#define dl (GETLO(dx))
-#define dh (GETHI(dx))
-#define GETLO(reg) ((reg)&0xff)
-#define GETHI(reg) (GETLO(((reg) >> 8)))
-#define SETLO(reg, val) (reg = UPPER(reg) | (val & 0xff))
-#define SETHI(reg, val) (reg = (val << 8) | LOWER(reg))
   if (dl == 0) {
     uint8_t *reg_used = ((uint8_t *)&dx);
     if (dh == 0x80) {
@@ -462,41 +504,49 @@ static uint16_t emit_ops(uint8_t i) {
   }
 }
 
-static void encode_mrm(uint16_t dx, opcode_t op, uint8_t reg) {
-  if (dh & 0x80 == 0 || phase == -1) {
-    // doing reg,reg ops.  in phase -1 we pick ptr_reg
-    if (phase == -1) {
-      SETHI(dx, ptr_reg);
-    }
-    emitb(op);
-    emitb(0xc0 | (reg << 3) | dh);
-    return;
+static uint8_t encode_mrm(uint16_t dx, opcode_t op, uint8_t reg) {
+  if (dh & 0x80) {
+    return bl_op_reg_mrm(op, reg, dh);
   }
-  if (phase != 0) {
-    dx = (uintptr_t)out->code;
-    phase = (uintptr_t)out->code + 1;
-    // carry set
-    return;
-  }
-  // otherwise it's <op> [ptr_reg+offset]
-  // the original code had logic for segment overrides, but these aren't
-  // relevant for us
-  emitb(op);
-  emitb(dh | (reg << 3) | ptr_reg);
-  op_off_patch = out->code;
+  return encode_mrm_ptr(op, reg);
 }
 
-static void encode_mrm_ptr(opcode_t op, uint8_t reg1) {}
+static uint8_t encode_mrm_ptr(opcode_t op, uint8_t reg1) {
+  switch (phase) {
+  case -1:
+    return bl_op_reg_mrm(op, reg1, ptr_reg);
+  case 0: {
+    // segment overrides, not needed nowadays L556
+    uint8_t mode = 0;
+    // mrm byte is fortunately more straightforward
+    encode_op_mrm(op, 0x80, reg1, ptr_reg);
+    op_off_patch = out->code;
+    emitd(0);
+    return 0; // XXX
+  }
+  default:
+    dx = (uintptr_t)phase;
+    phase = (uintptr_t)out->code + 1;
+    return 0; // XXX (stc)
+  }
+  assert(0);
+}
 
+// flag is 0 (or 0x20 if on 8086) during encrypter gen
+// if "run on different cpu" is set,
+//   flag is 0xff (or 0x1f if on 8086) during dec gen
+//
+// we'll assume we're not on an 8086.
 LOCAL uint8_t is_8086 = 0;
 static uint8_t emit_op_mrm(opcode_t op, uint8_t reg1, uint8_t reg2) {
   if (reg1 == reg2) {
     return reg1;
   }
-  // dec somewhere
+  // dec somewhere.. L245.
   if (is_8086 != 0xff) {
     return bl_op_reg_mrm(op, reg1, reg2);
   }
+  // otherwise optimize to XCHG AX,reg
   if (reg1 == REG_AX || reg2 == REG_AX) {
     uint8_t reg_used = reg1 + reg2 - REG_AX;
     if (phase == 0 || reg_used != ptr_reg) {
@@ -614,9 +664,82 @@ static int try_ptr_advance() {
   }
   return rv;
 }
-static void invert_ops_table() {}
-LOCAL uint16_t dx; // size
-LOCAL uint16_t bx; // patch point
+
+// do some shenanigans with pointers to simulate the behaviour
+// get the index back with ((return_value - ops_args)/4)
+static uint8_t *get_op_loc(int x) {
+  uint32_t *p = ops_args + 1;
+  uint8_t find = x >> 1;
+  bx = x;
+  for (int i = x * 2; i; i--) {
+    if (ops[i] < 3) {
+      continue;
+    }
+    if (LOWER(ops_args[i]) == find) {
+      return (uint8_t *)(ops_args + i);
+    } else if (UPPER(ops_args[i]) == find) {
+      return (uint8_t *)(ops_args + i) + 1;
+    }
+  }
+  return NULL;
+}
+static void invert_ops() {
+  uint8_t *p1 = get_op_loc(op_end_idx);
+  if (p1 == NULL) {
+    return;
+  }
+  op_idx = ((uintptr_t)p1 - (uintptr_t)ops_args) / 4;
+  int cur = op_idx;
+  while (1) {
+    uint8_t *p2 = get_op_loc(op_idx * 2);
+    if (p2 == NULL) {
+      cur = 0;
+    }
+    *p1 = cur;
+    if ((ops[cur] & 0x7f) == OP_SUB) {
+      // check whether it was unaligned
+      if (((uintptr_t)p1 - (uintptr_t)ops_args) % 4 == 0) {
+        ops[cur] = OP_ADD;
+        if (cur == 0) {
+          return;
+        }
+      }
+    } else if ((ops[cur] & 0x7f) == OP_ADD) {
+      if (((uintptr_t)p1 - (uintptr_t)ops_args) % 4 == 0) {
+        // flip tree
+        uint8_t tmp = *p1;
+        *p1 = *p2;
+        *p2 = *p1;
+      }
+      ops[cur] = OP_SUB;
+    } else if ((ops[cur] & 0x7f) == OP_MUL) {
+      // mul inv
+      cur = LOWER(ops_args[cur]);
+      ops_args[cur] = mul_inv(ops_args[cur]);
+    } else if ((ops[cur] & 0x7f) == OP_ROL) {
+      ops[cur] = OP_ROR;
+    } else if ((ops[cur] & 0x7f) == OP_ROR) {
+      ops[cur] = OP_ROL;
+    }
+    // till...
+    if (cur == 0) {
+      return;
+    }
+  }
+}
+
+// from hacker's delight
+uint32_t mul_inv(uint32_t d) { // d must be odd.
+  uint32_t xn, t;
+  xn = d;
+loop:
+  t = d * xn;
+  if (t == 1)
+    return xn;
+  xn = xn * (2 - t);
+  goto loop;
+}
+
 static int generate_code_from_table(enum mut_routine_size_t routine_size) {
   memset(&reg_set_enc, -1, 8);
   reg_set_enc[REG_DX] = 0;
@@ -627,6 +750,9 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
   uint32_t arg = get_op_args(op_idx);
   pick_registers(arg);
 
+  // -1: post crypt ops junk (forward and reverse)
+  //  0: loop end (ptr incr, jnz loop_start, <junk>)
+  //  1: loop
   switch (phase) {
   case -1:
     // making post crypt ops junk {{{
@@ -647,7 +773,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
         out->code -= 5;
         reg_set_dec[ptr_reg] = REG_IS_FREE;
       }
-      bx = (uint16_t)&patch_dummy; // XXX bogus
+      bx = (uintptr_t)&patch_dummy; // XXX bogus
       goto size_ok;
     }
     break;
@@ -682,7 +808,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
 
         in->routine_size >>= 1;
         generate_code(in->routine_size);
-        invert_ops_table();
+        invert_ops();
         need_increment_ptr = try_ptr_advance() == 0;
         generate_code_from_table(in->routine_size);
 
@@ -747,7 +873,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
       }
       *out->code = 0xc3; // retf
 
-      // outro junk
+      // outro junk (phase is -1)
       generate_code(MUT_ROUTINE_SIZE_MEDIUM);
 
       // TODO pushes (L939)
@@ -787,7 +913,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
 
 static int make(uint8_t *p, enum mut_routine_size_t routine_size) {
   generate_code(routine_size);
-  invert_ops_table();
+  invert_ops();
   return generate_code_from_table(routine_size);
 }
 
@@ -828,7 +954,25 @@ static void make_enc_and_dec(struct mut_input *in, struct mut_output *out) {
   return;
 }
 
+LOCAL uint32_t arg_size_neg;
+static uint32_t get_arg_size() { return -arg_size_neg; }
+
+LOCAL void encrypt_target() {
+  // entry not zero
+  // fix pops
+  // emit jump
+  // emit nops for alignment
+
+  // ... bp is the segment of the ds:dx
+  exec_enc_stage(get_arg_size());
+}
+
 struct mut_output *mut_engine(struct mut_input *in, struct mut_output *out) {
   make_enc_and_dec(in, out);
+
+  // returns dx = end of routine?
+  // returns bp = result of routine?
+  encrypt_target();
+
   return out;
 }
