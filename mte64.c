@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -14,39 +15,40 @@
 #define MAX_ADD 512
 #define MAX_ADD_LEN 25
 // static const int CODE_LEN = 2100; // NOTUSED
+
 // size of the work segment + MAX_ADD_LEN
 // 1394-(0x21+0x42+0x42+0x42+0x42+19+16+1+1+1+1+2+7+(512*2))=0
 // static const int MAX_LEN = 1394;
 
 enum mut_routine_size_t {
-  MUT_ROUTINE_SIZE_TINY = (2 << 0) - 1,
-  MUT_ROUTINE_SIZE_SMALL = (2 << 1) - 1,
-  MUT_ROUTINE_SIZE_MEDIUM = (2 << 2) - 1,
-  MUT_ROUTINE_SIZE_BIG = (2 << 3) - 1
+  MUT_ROUTINE_SIZE_TINY = 0x1,
+  MUT_ROUTINE_SIZE_SMALL = 0x3,
+  MUT_ROUTINE_SIZE_MEDIUM = 0x7,
+  MUT_ROUTINE_SIZE_BIG = 0xf
 }; // bl
-struct mut_input_flags {
-  unsigned int preserve_ax : 1;
-  unsigned int preserve_cx : 1;
-  unsigned int preserve_dx : 1;
-  unsigned int preserve_x : 1;
-  unsigned int preserve_sp : 1;
-  unsigned int preserve_bp : 1;
-  unsigned int preserve_si : 1;
-  unsigned int preserve_di : 1;
-  unsigned int run_on_different_cpu : 1; // NOTUSED
-  unsigned int cs_is_not_ds : 1;         // NOTUSED
-  unsigned int cs_is_not_ss : 1;         // NOTUSED
-  unsigned int dont_align : 1;           // paragraph boundary alignment
+enum mut_flags_t {
+  MUT_FLAGS_PRESERVE_AX = 0x001,
+  MUT_FLAGS_PRESERVE_CX = 0x002,
+  MUT_FLAGS_PRESERVE_DX = 0x004,
+  MUT_FLAGS_PRESERVE_BX = 0x008,
+  MUT_FLAGS_PRESERVE_SP = 0x010,
+  MUT_FLAGS_PRESERVE_BP = 0x020,
+  MUT_FLAGS_PRESERVE_SI = 0x040,
+  MUT_FLAGS_PRESERVE_DI = 0x080,
+  MUT_FLAGS_RUN_ON_DIFFERENT_CPU = 0x100, // NOTUSED
+  MUT_FLAGS_CS_IS_NOT_DS = 0x200,         // NOTUSED
+  MUT_FLAGS_CS_IS_NOT_SS = 0x400,         // NOTUSED
+  MUT_FLAGS_DONT_ALIGN = 0x800,           // paragraph boundary alignment
 };
 
 struct mut_input {
-  uint8_t *code;                // ds:dx
-  unsigned int len;             // cx
-  uintptr_t exec_offset;        // bp
-  uintptr_t entry_offset;       // di
-  uintptr_t payload_offset;     // si
-  struct mut_input_flags flags; // ax
-  enum mut_routine_size_t routine_size;
+  uint8_t *code;            // ds:dx
+  unsigned int len;         // cx
+  uintptr_t exec_offset;    // bp
+  uintptr_t entry_offset;   // di
+  uintptr_t payload_offset; // si
+  mut_flags_t flags;        // ax
+  mut_routine_size_t routine_size;
 };
 struct mut_output {
   uint8_t *code;               // ds:dx
@@ -56,6 +58,13 @@ struct mut_output {
 };
 #endif
 // }}}
+
+#define SWAP(x, y)                                                             \
+  do {                                                                         \
+    typeof(x) SWAP = x;                                                        \
+    x = y;                                                                     \
+    y = SWAP;                                                                  \
+  } while (0)
 
 // {{{
 LOCAL struct mut_input *in;
@@ -67,12 +76,19 @@ LOCAL uint8_t encrypt_stage[MAX_ADD];
 LOCAL uintptr_t jnz_patch_dec[0x21];
 LOCAL uintptr_t jnz_patch_hits[0x21];
 LOCAL uintptr_t jnz_patch_enc[0x21];
+
+LOCAL uint32_t arg_code_entry;
+LOCAL uint32_t arg_flags;
+LOCAL uint32_t arg_size_neg;
+LOCAL uint32_t arg_exec_off;
+LOCAL uint32_t arg_start_off;
 // }}}
 
 #if LOCAL_INTERFACE
+// XXX start or end prob means "misc ops"
 enum op_t {
   OP_DATA,
-  OP_START_OR_END, // XXX prob means "misc ops"
+  OP_START_OR_END,
   OP_POINTER,
   OP_SUB,
   OP_ADD,
@@ -126,10 +142,12 @@ LOCAL uint8_t op_free_idx = 1;
 LOCAL uint8_t op_next_idx = 1;
 LOCAL uint8_t op_end_idx;
 LOCAL uint8_t *op_off_patch;
-LOCAL uint8_t patch_dummy[4];
+LOCAL uint32_t patch_dummy;
 LOCAL uint8_t *loop_start;
+LOCAL uint8_t junk_len_mask;
 
-LOCAL uint32_t ax, cx, dx, bx, sp, bp, si, di;
+LOCAL uint32_t stack[128];
+LOCAL uint32_t ax, cx, dx, bx, *sp = stack, bp, si, di;
 #define al (GETLO(ax))
 #define ah (GETHI(ax))
 #define cl (GETLO(cx))
@@ -140,69 +158,80 @@ LOCAL uint32_t ax, cx, dx, bx, sp, bp, si, di;
 #define bh (GETHI(bx))
 #define GETLO(reg) ((reg)&0xff)
 #define GETHI(reg) (GETLO(((reg) >> 8)))
-#define SETLO(reg, val) (reg = UPPER(reg) | ((val)&0xff))
-#define SETHI(reg, val) (reg = ((val) << 8) | LOWER(reg))
+#define SETLO(reg, val) (reg = GETHI(reg) | ((val)&0xff))
+#define SETHI(reg, val) (reg = ((val) << 8) | GETLO(reg))
 
 static void make_ops_table(enum mut_routine_size_t routine_size) {
+  op_idx = 1;
+  op_free_idx = 1;
+  op_next_idx = 1;
 
-  ops[0] = 0x81;
-  ops[1] = 1;
+  ops[0] = OP_START_OR_END;
+  ops[1] = OP_START_OR_END | 0x80;
 
-  while (1) {
-    uint32_t arg = random();
-    uint8_t next_op = ops[op_next_idx];
-    uint8_t current_op = ops[op_next_idx - 1];
+  do {
+    dx = random();
+    ax = random();
 
-    if (current_op == 6) {
-      arg |= 1;
-      if (phase == 0) {
-        next_op = 2; // ptr
-      }
-      goto save_op_idx;
+    si = bx = op_next_idx;
+
+    cx = (ops[op_idx] << 8) | ops[op_idx - 1];
+
+    if (ch == OP_MUL) {
+      dx |= 1;
+    } else if (ch == OP_MUL | 0x80) {
+      // 0: reg move
+      SETLO(cx, OP_DATA);
+      bx++;
     }
-    if (current_op == 0x86) {
-      // 0 == data move
-      next_op = 0;
-      op_next_idx++;
-    }
-    uint32_t pick = random();
-    if ((pick & routine_size) >= op_next_idx) {
-      if ((op_next_idx & 1) == 0 || next_op != 0) {
-        next_op = 0;
-        if ((arg & 255) != 0 && phase == 0) {
-          next_op = 2; // ptr
-        }
+
+    SETLO(ax, (al & junk_len_mask));
+    if (bl >= al) {
+      int carry = bl & 1;
+      SETLO(bx, bl >> 1);
+      if ((!carry && dl != 0) || bp != 0) {
+        SETLO(ax, OP_DATA);
+        dx |= 1;
+      } else {
+        SETLO(ax, OP_POINTER);
       }
-    save_op_idx:
-      if (current_op & 0x80) {
-        op_end_idx = op_next_idx;
-        next_op = 1; // end
+
+      // save_op_idx
+      if (ch & 0x80) {
+        op_end_idx = GETLO(si);
+        SETLO(ax, OP_START_OR_END);
       }
-      ops[op_next_idx] = next_op;
+      ops[si] = al;
     } else {
-      // random ops
-      pick = arg % 12;
-      if (current_op & 0x80) {
-        pick >>= 1;
+      SWAP(ax, dx);
+      SETLO(ax, (al % 12));
+      int carry = 0;
+      if ((ch & 0x80) == 0) {
+        carry = ax & 1;
+        SETLO(ax, (al >> 1));
       }
-      pick += 3;
-      op_free_idx += 2;
-      next_op = 0;
-      if ((arg & 1) == 0 || pick >= 6) {
-        uint8_t tmp;
-        tmp = next_op;
-        next_op = current_op;
-        current_op = tmp;
+      ax += 3;
+      SETHI(ax, al);
+      ops[si] = al;
+      dx = ((op_free_idx + 2) << 8) | (op_free_idx + 1);
+      op_free_idx = dh;
+      bx = dl;
+      SETLO(cx, 0);
+      if (!carry || al >= 6) {
+        cx = (cl << 8) | ch;
       }
-      ops[op_free_idx - 1] = next_op ^ pick;
-      ops[op_free_idx - 2] = current_op ^ pick;
+      ax ^= cx;
+      ops[bx] = al;
+      ops[bx + 1] = ah;
     }
-    ops_args[op_next_idx] = ((op_next_idx + 1) << 8) | (op_next_idx + 2);
+    si <<= 1;
+    ops_args[si] = dx;
     op_next_idx++;
-    if (op_next_idx < op_free_idx) {
+    SETLO(ax, op_free_idx);
+    if (al < op_next_idx) {
       return;
     }
-  }
+  } while (1);
 }
 
 #define REG_AX 0
@@ -784,7 +813,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
       emit_ops(op_idx);
       phase--;
       uint8_t *hold = op_off_patch;
-      op_off_patch = patch_dummy;
+      op_off_patch = (uint8_t *)&patch_dummy;
       int need_increment_ptr = 1;
       if (generating_dec()) {
         phase++;
@@ -835,13 +864,16 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
         // TODO adjust offsets (L987)
       }
 
+      printf("%x %x %x\n", hold, op_off_patch, patch_dummy);
+      assert(hold);
+
       // patch offsets
       uintptr_t target = (uintptr_t)out->code;
       target -= in->len;
-      hold[0] = (long int)target;
-      hold[1] = (long int)target >> 8;
-      hold[2] = (long int)target >> 16;
-      hold[3] = (long int)target >> 24;
+      hold[0] = (uint8_t)target;
+      hold[1] = (uint8_t)target >> 8;
+      hold[2] = (uint8_t)target >> 16;
+      hold[3] = (uint8_t)target >> 24;
       op_off_patch[0] = (long int)target;
       op_off_patch[1] = (long int)target >> 8;
       op_off_patch[2] = (long int)target >> 16;
@@ -900,7 +932,7 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
     }
     // }}}
   default:
-    // intro junk
+    // intro junk if signed, otherwise loop start
     emit_ops(op_idx);
     emitb(0x90 | data_reg); // xchg ax,reg
     emitb(0xc3);            // retf
@@ -911,53 +943,141 @@ static int generate_code_from_table(enum mut_routine_size_t routine_size) {
   return 0;
 }
 
-static int make(uint8_t *p, enum mut_routine_size_t routine_size) {
-  generate_code(routine_size);
-  invert_ops();
-  return generate_code_from_table(routine_size);
-}
-
-static uint32_t exec_enc_stage(uint32_t init_val) {
+static uint32_t exec_enc_stage() {
   // TODO
   return 0;
 }
 
+static uint32_t get_arg_size() { return -arg_size_neg; }
+
+#define PUSH(reg) (*sp++ = (reg))
+#define POP(reg) ((reg) = *sp--)
 static void make_enc_and_dec(struct mut_input *in, struct mut_output *out) {
-
-  // round onto a word boundary, but not a page boundary
-  in->len += MAX_ADD_LEN - 5; // XXX holding 3 bytes for JMP?
-  in->len = -in->len;
-  in->len = (in->len & 0xfe) == 0 ? (in->len & 0xfffe) - 2 : in->len & 0xfffe;
-
-  // in->len negated, this is a subtract
-  uintptr_t total_end = in->entry_offset + in->len;
-  if (total_end & ~1) {
-    total_end -= 2;
+  cx += 16;
+  cx = -cx;
+  SETLO(cx, cx & 0xfe);
+  if (cl == 0) {
+    cx -= 2;
   }
+  SWAP(ax, di);
+  arg_code_entry = ax;
+  ax += cx;
+  SETLO(ax, ax & 0xfe);
+  if (al == 0) {
+    ax -= 2;
+  }
+  *sp++ = ax;
+  ax = di;
+  arg_flags = ax;
+  SWAP(ax, cx);
+  arg_size_neg = ax;
+  SWAP(ax, bp);
+  arg_exec_off = ax;
+  SWAP(ax, si);
+  arg_start_off = si;
+  return restart();
+}
 
-  phase = total_end;
+static void restart() {
+  POP(bp);
+  PUSH(bp);
+  PUSH(bx);
 
   srandom(time(NULL));
-  memset(&reg_set_dec, -1, sizeof(reg_set_dec));
-  unsigned int junk_len = make(decrypt_stage, MUT_ROUTINE_SIZE_MEDIUM);
-  if (junk_len > 0) {
-    uint32_t result = exec_enc_stage(1);
-    decrypt_stage[junk_len - 1] = result; // XXX uint32_t
-  }
-  phase = 0;
-  unsigned int loop_len = make(decrypt_stage + junk_len, in->routine_size);
-  phase = 1;
-  unsigned int outro_junk_len =
-      make(decrypt_stage + junk_len + loop_len, in->routine_size);
 
-  out->len = junk_len + loop_len + outro_junk_len;
+  for (int i = 0; i < 8; i++) {
+    reg_set_dec[i] = REG_IS_USED;
+  }
+
+  di = (uintptr_t)decrypt_stage;
+  bx = 7;
+  make();
+  di -= 1;
+  if (di != (uintptr_t)decrypt_stage) {
+    PUSH(dx);
+    PUSH(di);
+    PUSH(bp);
+    ax = 1;
+    exec_enc_stage();
+    POP(di);
+    SWAP(ax, bp);
+    POP(di);
+    POP(dx);
+  }
+  POP(bx);
+  POP(ax);
+  bp = 0;
+  return make();
+}
+
+static void make() {
+  PUSH(ax);
+  PUSH(bx);
+  PUSH(dx);
+  PUSH(di);
+
+  ax = 0;
+  for (int i = 0; i < 0x21; i++) {
+    jnz_patch_dec[i] = 0;
+    jnz_patch_hits[i] = 0;
+    jnz_patch_enc[i] = 0;
+  }
+  cx = 0;
+  ax = 4;
+  PUSH(arg_flags);
+  SETHI(arg_flags, MUT_FLAGS_CS_IS_NOT_SS);
+
+  dx = arg_size_neg;
+  di = (uintptr_t)encrypt_stage;
+
+  PUSH(bp);
+  g_code();
+  POP(bp);
+
+  invert_ops();
+
+  POP(ax);
+  POP(di);
+  POP(dx);
+
+  SETHI(arg_flags, al);
+  SETLO(ax, ax & 1);
+  is_8086 -= al;
+  PUSH(ax);
+  g_code_from_ops();
+  POP(ax);
+  is_8086 += al;
+
+  ax = bx;
+  POP(bx);
+
+  ax -= (uintptr_t)patch_dummy;
+  if (ax < 0) {
+    return restart();
+  }
+  if (ax == 0 && arg_start_off != 0) {
+    return restart();
+  }
+
+  POP(bx);
   return;
 }
 
-LOCAL uint32_t arg_size_neg;
-static uint32_t get_arg_size() { return -arg_size_neg; }
+static void g_code() {
+  junk_len_mask = bl;
+  return g_code_no_mask();
+}
+static void g_code_no_mask() {
+  PUSH(dx);
+  PUSH(di);
+  make_ops_table(bx);
+  POP(di);
+  POP(dx);
+  return g_code_from_ops();
+}
+static void g_code_from_ops() { PUSH(di); }
 
-LOCAL void encrypt_target() {
+static void encrypt_target() {
   // entry not zero
   // fix pops
   // emit jump
@@ -967,9 +1087,23 @@ LOCAL void encrypt_target() {
   exec_enc_stage(get_arg_size());
 }
 
-struct mut_output *mut_engine(struct mut_input *in, struct mut_output *out) {
-  make_enc_and_dec(in, out);
+struct mut_output *mut_engine(struct mut_input *f_in,
+                              struct mut_output *f_out) {
+  in = f_in;
+  out = f_out;
 
+  *sp++ = (uintptr_t)in->code;
+  *sp++ = (uintptr_t)in->code;
+  *sp++ = (uintptr_t)in->exec_offset;
+  dx = (uintptr_t)in->code;
+  cx = in->len;
+  bp = in->exec_offset;
+  di = in->entry_offset;
+  si = in->payload_offset;
+  bx = in->routine_size;
+  ax = in->flags;
+
+  make_enc_and_dec(in, out);
   // returns dx = end of routine?
   // returns bp = result of routine?
   encrypt_target();
