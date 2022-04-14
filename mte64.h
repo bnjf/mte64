@@ -6,6 +6,24 @@ struct mut_output *mut_engine(struct mut_input *f_in,struct mut_output *f_out);
 static void encrypt_target();
 static void mark_and_emit(uint8_t *p);
 static void pick_ptr_register(uint8_t *p);
+static void emit_f7_op();
+static void emit_81_ops();
+static void save_op_done();
+int is_parity_even(unsigned int n);
+static void emit_ops_maybe_mul();
+static void store_data_reg();
+static void emit_ops_jnz();
+static void patch();
+static void patch_offsets();
+static void encode_retf();
+static void encode_mrm_ptr();
+static void encode_mrm();
+static void encode_op_mrm();
+static void bl_op_reg_mrm();
+static void size_ok();
+static void single_ref();
+static void emit_eol_bl();
+static void emit_ops();
 static void ptr_and_r_sto();
 static void g_code_no_mask();
 static void g_code_from_ops();
@@ -19,29 +37,13 @@ uint32_t mul_inv(uint32_t d);
 static void invert_ops();
 static uint8_t *get_op_loc(int x);
 static int try_ptr_advance();
-static int emit_mov_reg(uint8_t a,uint8_t b);
-static void emit_mov_imm(uint8_t reg,uint32_t val);
-static uint16_t emitw(uint16_t x);
-enum opcode_t {
-  OPCODE_ADD = 0x03,
-  OPCODE_OR = 0x0B,
-  OPCODE_AND = 0x23,
-  OPCODE_SUB = 0x2B,
-  OPCODE_XOR = 0x33,
-  OPCODE_MOV_IMM = 0xB8
-};
-typedef enum opcode_t opcode_t;
-static uint8_t encode_mrm(uint16_t dx,opcode_t op,uint8_t reg);
-static uint32_t emitd(uint32_t x);
+static void emit_mov_data();
+static void encode_mrm_dh_s();
 static void emit_mov();
-static void emit_mov_data(uint32_t val);
-static uint16_t emit_ops(uint8_t i);
+static void emit_mov_imm(uint8_t reg,uint32_t val);
+static uint32_t emitd(uint32_t x);
+static uint16_t emitw(uint16_t x);
 static uint8_t emitb(uint8_t x);
-static uint8_t encode_op_mrm(uint8_t op,uint8_t mode,uint8_t src,uint8_t dst);
-static uint8_t bl_op_reg_mrm(uint8_t op,uint8_t src,uint8_t dst);
-static uint8_t emit_op_mrm(opcode_t op,uint8_t reg1,uint8_t reg2);
-static uint8_t encode_mrm_ptr(opcode_t op,uint8_t reg1);
-static uint8_t encode_mrm_dh_s(uint8_t op,uint8_t src,uint8_t dst);
 static int generating_dec();
 static int generating_enc();
 static uint32_t get_op_args(uint8_t i);
@@ -65,6 +67,15 @@ enum opcode_f7_t {
   OPCODE_F7_IDIV
 };
 typedef enum opcode_f7_t opcode_f7_t;
+enum opcode_t {
+  OPCODE_ADD = 0x03,
+  OPCODE_OR = 0x0B,
+  OPCODE_AND = 0x23,
+  OPCODE_SUB = 0x2B,
+  OPCODE_XOR = 0x33,
+  OPCODE_MOV_IMM = 0xB8
+};
+typedef enum opcode_t opcode_t;
 enum op_t {
   OP_DATA,
   OP_START_OR_END,
