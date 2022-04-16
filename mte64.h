@@ -6,10 +6,14 @@ struct mut_output *mut_engine(struct mut_input *f_in,struct mut_output *f_out);
 static void encrypt_target();
 static void mark_and_emit(uint8_t *p);
 static void pick_ptr_register(uint8_t *p);
+static void emit_ops_emit_bl();
+static void emit_op_mrm();
+static void emit_ops_maybe_rol();
+static void emit_ops_not_mul();
 static void emit_f7_op();
 static void emit_81_ops();
 static void save_op_done();
-int is_parity_even(unsigned int n);
+int is_parity_even(uint64_t x);
 static void emit_ops_maybe_mul();
 static void store_data_reg();
 static void emit_ops_jnz();
@@ -56,6 +60,48 @@ enum mut_routine_size_t {
 };
 typedef enum mut_routine_size_t mut_routine_size_t;
 static void make_ops_table(enum mut_routine_size_t routine_size);
+typedef union mrm_t mrm_t;
+union mrm_t {
+  uint8_t byte;
+  struct {
+    // note to self: bitfields are right to left
+    uint8_t reg : 3;
+    uint8_t op : 3;
+    uint8_t mod : 2;
+  };
+};
+enum reg8_t {
+  REG_AL = 0,
+  REG_CL,
+  REG_DL,
+  REG_BL,
+  REG_AH,
+  REG_CH,
+  REG_DH,
+  REG_BH
+};
+typedef enum reg8_t reg8_t;
+enum reg16_t {
+  REG_AX = 0,
+  REG_CX,
+  REG_DX,
+  REG_BX,
+  REG_SP,
+  REG_BP,
+  REG_SI,
+  REG_DI
+};
+typedef enum reg16_t reg16_t;
+enum opcode_80_t {
+  OPCODE_80_ADD,
+  OPCODE_80_OR,
+  OPCODE_80_ADC,
+  OPCODE_80_SBB,
+  OPCODE_80_AND,
+  OPCODE_80_SUB,
+  OPCODE_80_XOR
+};
+typedef enum opcode_80_t opcode_80_t;
 enum opcode_f7_t {
   OPCODE_F7_TEST_IMM,
   OPCODE_F7_TEST_IMM_ALT,
@@ -73,7 +119,9 @@ enum opcode_t {
   OPCODE_AND = 0x23,
   OPCODE_SUB = 0x2B,
   OPCODE_XOR = 0x33,
-  OPCODE_MOV_IMM = 0xB8
+  OPCODE_MOV_IMM = 0xB8,
+  OPCODE_MOV_REG_MRM8 = 0x8a,
+  OPCODE_MOV_REG_MRM16 = 0x8b
 };
 typedef enum opcode_t opcode_t;
 enum op_t {
@@ -97,10 +145,10 @@ typedef enum op_t op_t;
 #define LOCAL_INTERFACE 0
 #define LOCAL static
 struct mut_output {
-  uint8_t *code;               // ds:dx
+  uint8_t* code;               // ds:dx
   unsigned int len;            // ax
-  uint8_t *routine_end_offset; // di
-  uint8_t *loop_offset;        // si
+  uint8_t* routine_end_offset; // di
+  uint8_t* loop_offset;        // si
 };
 enum mut_flags_t {
   MUT_FLAGS_PRESERVE_AX = 0x001,
@@ -118,7 +166,7 @@ enum mut_flags_t {
 };
 typedef enum mut_flags_t mut_flags_t;
 struct mut_input {
-  uint8_t *code;            // ds:dx
+  uint8_t* code;            // ds:dx
   unsigned int len;         // cx
   uintptr_t exec_offset;    // bp
   uintptr_t entry_offset;   // di
