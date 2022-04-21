@@ -1,7 +1,7 @@
 
 CFLAGS?=-g -DDEBUG
 
-all: tags demo
+all: demo
 
 clean:
 	rm -f demo.o mte64.o mte64.h

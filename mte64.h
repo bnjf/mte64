@@ -6,16 +6,16 @@ struct mut_output *mut_engine(struct mut_input *f_in,struct mut_output *f_out);
 static void encrypt_target();
 static void mark_and_emit(uint8_t *p);
 static void pick_ptr_register(uint8_t *p);
-static void emit_ops_emit_bl();
-static void emit_ops_maybe_rol();
-static void emit_ops_not_mul();
-static void emit_f7_op();
 static void emit_81_ops();
 static void save_op_done();
+static void emit_ops_emit_bl();
+static void emit_ops_maybe_rol();
+static void emit_f7_op();
+static void emit_ops_not_mul();
 static void emit_ops_maybe_mul();
-static void mark_reg_used();
-static void store_data_reg();
 static void emit_ops_jnz();
+static void store_data_reg();
+static void mark_reg_used();
 static void patch();
 static void patch_offsets();
 static void encode_mrm();
@@ -30,13 +30,11 @@ static void ptr_and_r_sto();
 static void g_code_no_mask();
 static void g_code_from_ops();
 static void g_code();
-static void dump_all_regs();
 static void make();
 static void restart();
 static void make_enc_and_dec(struct mut_input *in,struct mut_output *out);
 static uint32_t get_arg_size();
 static void exec_enc_stage();
-uint32_t mul_inv(uint32_t d);
 static void emit_op_mrm();
 static void encode_mrm_ptr();
 static void encode_mrm_dh_s();
@@ -51,14 +49,17 @@ static uint32_t get_op_args(uint8_t i);
 static void fix_arg();
 static void try_ptr_advance();
 int is_parity_even(uint64_t x);
-static uint8_t shr8(uint8_t x);
+uint32_t integer_inverse(uint32_t a);
 static void invert_ops_loop();
 static void invert_ops();
 static void get_op_loc();
-static uint8_t _get_op_arg(int i);
 static void dump_ops_tree_as_stack(int i);
 static void dump_ops_tree(int i,int d);
 static void dump_ops_table();
+static uint8_t _set_op_arg(int i,uint8_t arg);
+static uint8_t _get_op_arg(int i);
+static uint8_t shr8(uint8_t x);
+static void dump_all_regs();
 enum mut_routine_size_t {
   MUT_ROUTINE_SIZE_TINY = 0x1,
   MUT_ROUTINE_SIZE_SMALL = 0x3,
@@ -132,9 +133,9 @@ enum opcode_t {
 };
 typedef enum opcode_t opcode_t;
 enum op_t {
-  OP_DATA,         // init data
-  OP_START_OR_END, // aux init (appears at least once)
-  OP_POINTER,      // XXX misc op performed on data_reg
+  OP_DATA,         // mov ptr_reg,data_reg || mov data_reg,ptr_reg
+  OP_START_OR_END, // mov ptr,imm || mov data,ptr
+  OP_POINTER,      // mov [ptr],data_reg || mov data_reg,[ptr]
   OP_SUB,
   OP_ADD,
   OP_XOR,
