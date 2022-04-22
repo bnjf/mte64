@@ -9,7 +9,7 @@ static void pick_ptr_register(uint8_t *p);
 static void emit_81_ops();
 static void save_op_done();
 static void emit_ops_emit_bl();
-static void emit_ops_maybe_rol();
+static void emit_ops_maybe_rol(int is_rotate);
 static void emit_f7_op();
 static void emit_ops_not_mul();
 static void emit_ops_maybe_mul();
@@ -153,10 +153,10 @@ typedef enum op_t op_t;
 #define LOCAL_INTERFACE 0
 #define LOCAL static
 struct mut_output {
-  uint8_t* code;               // ds:DX
+  uint8_t *code;               // ds:DX
   unsigned int len;            // AX
-  uint8_t* routine_end_offset; // DI
-  uint8_t* loop_offset;        // SI
+  uint8_t *routine_end_offset; // DI
+  uint8_t *loop_offset;        // SI
 };
 enum mut_flags_t {
   MUT_FLAGS_PRESERVE_AX = 0x001,
@@ -174,7 +174,7 @@ enum mut_flags_t {
 };
 typedef enum mut_flags_t mut_flags_t;
 struct mut_input {
-  uint8_t* code;            // ds:DX
+  uint8_t *code;            // ds:DX
   unsigned int len;         // CX
   uintptr_t exec_offset;    // BP
   uintptr_t entry_offset;   // DI
