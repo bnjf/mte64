@@ -32,7 +32,7 @@ static void g_code_from_ops();
 static void g_code();
 static void make();
 static void restart();
-static void make_enc_and_dec(struct mut_input *in,struct mut_output *out);
+static void make_enc_and_dec();
 static uint32_t get_arg_size();
 static void exec_enc_stage();
 static void emit_op_mrm();
@@ -68,6 +68,7 @@ enum mut_routine_size_t {
 };
 typedef enum mut_routine_size_t mut_routine_size_t;
 static void make_ops_table(enum mut_routine_size_t routine_size);
+#define LOCAL static
 typedef union mrm_t mrm_t;
 union mrm_t {
   uint8_t byte;
@@ -101,7 +102,7 @@ enum reg16_t {
 };
 typedef enum reg16_t reg16_t;
 enum opcode_80_t {
-  OPCODE_80_ADD,
+  OPCODE_80_ADD = 0,
   OPCODE_80_OR,
   OPCODE_80_ADC,
   OPCODE_80_SBB,
@@ -111,7 +112,7 @@ enum opcode_80_t {
 };
 typedef enum opcode_80_t opcode_80_t;
 enum opcode_f7_t {
-  OPCODE_F7_TEST_IMM,
+  OPCODE_F7_TEST_IMM = 0,
   OPCODE_F7_TEST_IMM_ALT,
   OPCODE_F7_NOT,
   OPCODE_F7_NEG,
@@ -127,31 +128,35 @@ enum opcode_t {
   OPCODE_AND = 0x23,
   OPCODE_SUB = 0x2B,
   OPCODE_XOR = 0x33,
-  OPCODE_MOV_IMM = 0xB8,
-  OPCODE_MOV_REG_MRM8 = 0x8a,
-  OPCODE_MOV_REG_MRM16 = 0x8b
+  OPCODE_MOV_IMM8 = 0xB0,
+  OPCODE_MOV_IMM16 = 0xB8,
+  OPCODE_MOV_REG_MRM8 = 0x8A,
+  OPCODE_MOV_REG_MRM16 = 0x8B
 };
 typedef enum opcode_t opcode_t;
 enum op_t {
+  // loads and stores
   OP_DATA,         // mov ptr_reg,data_reg || mov data_reg,ptr_reg
   OP_START_OR_END, // mov ptr,imm || mov data,ptr
   OP_POINTER,      // mov [ptr],data_reg || mov data_reg,[ptr]
+  // invertible ops
   OP_SUB,
   OP_ADD,
   OP_XOR,
   OP_MUL,
   OP_ROL,
   OP_ROR,
+  // junk ops
   OP_SHL,
   OP_SHR,
   OP_OR,
   OP_AND,
   OP_IMUL,
+  // dummy jump
   OP_JNZ
 };
 typedef enum op_t op_t;
 #define LOCAL_INTERFACE 0
-#define LOCAL static
 struct mut_output {
   uint8_t *code;               // ds:DX
   unsigned int len;            // AX

@@ -14,7 +14,7 @@ int main(int argc, char *argv[]) {
     in.entry_offset = 0;
     in.payload_offset = 0;
     in.flags = 0x101;
-    in.routine_size = 1;
+    in.routine_size = 0xf;
 
     mut_engine(&in, &out);
   }
