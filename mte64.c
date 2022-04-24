@@ -1985,7 +1985,7 @@ static void emit_ops_emit_bl() {
   if (BL == 0xc1) {
     emitb(AL); // imm8 arg
     last_op = CH;
-    DX = data_reg;
+    DX = data_reg << 8;
     uint8_t *p = (uint8_t *)DI - 3;
     printf("emitted %x %x %x\n", p[0], p[1], p[2]);
     return;
@@ -1996,7 +1996,7 @@ static void emit_ops_emit_bl() {
   if (cpu_state.c) {
     // reg,reg
     last_op = CH;
-    DX = data_reg;
+    DX = data_reg << 8;
     return;
   }
 
@@ -2007,7 +2007,7 @@ static void emit_ops_emit_bl() {
   SWAP(AX, DX);
   emitb(AL);
   last_op = CH;
-  DX = data_reg;
+  DX = data_reg << 8;
   return;
 }
 static void emit_ops_jnz() {
@@ -2070,15 +2070,20 @@ static void store_data_reg() {
   CH = AH;
   PUSH(AX);
   if (DL == 0) {
+    dump_all_regs();
+    D("stack: %x %x %x\n", stack[0], stackp[1], stackp[2]);
+    // assert((DH & 0x7f) < 8);
     if (DH == 0x80) {
-      AL = (AL - 5) < 4 ? REG_CX : REG_DX;
+      // is it op 0 with a pending move?
+      AL = AL < 5 ? REG_DX : REG_CX;
       DH = AL | 0x58;
       emitb(AL);
     } else {
       // emit_ops::@@didnt_push
       if ((DH & 0x80) == 0 && DH != ptr_reg) {
-        BL = DH;
-        BH = 0;
+        // BL = DH;
+        // BH = 0;
+        BX = DH;
         reg_set_enc[BX]--;
       }
     }
