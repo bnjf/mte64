@@ -1,5 +1,6 @@
 
 CFLAGS?=-g -DDEBUG
+#LDFLAGS=-ldl
 
 all: demo
 

@@ -1,0 +1,29 @@
+
+
++- [0] D = LAST_REG
++- [1] MUL #2, #3
++--- [2] ROL #4, #5
++----- [4] ADD #6, #7
++------- [6] D = 3d1b58ba
++------- [7] # = 2eb141f2
++----- [5] ROR #8, #9
++------- [8] # = 79e2a9e3
++------- [9] # = 515f007d
++--- [3] # = 74b0dc51
+
+gdb$ disas &encrypt_stage,+0x28
+Dump of assembler code from 0x555555563820 to 0x555555563848:
+<encrypt_stage+0>:        mov    eax,0x79e2a9e3   ; imm #8
+<encrypt_stage+5>:        rol    eax,0x3          ; ror 13 optimized to rol 3!
+<encrypt_stage+8>:        mov    ebp,eax
+<encrypt_stage+10>:       mov    eax,0xffffffaa   ; load #D
+<encrypt_stage+15>:       sub    eax,0x2eb141f2   ; imm #7
+<encrypt_stage+20>:       mov    ebx,0x515f007d   ; imm #9
+<encrypt_stage+25>:       mov    ecx,ebx          ; XXX this should be bp
+<encrypt_stage+27>:       rol    eax,cl           ;
+<encrypt_stage+29>:       mov    ebx,eax
+<encrypt_stage+31>:       mov    edx,0x74b0dc51   ; imm #3
+<encrypt_stage+36>:       mul    edx
+<encrypt_stage+38>:       nop                     ; store #D
+<encrypt_stage+39>:       ret
+
