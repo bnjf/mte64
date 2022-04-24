@@ -1602,7 +1602,7 @@ static void emit_ops() {
   }
   // OP_REG_INIT
   DX = ops_args[BX];
-  if (AX = -2) {
+  if (AX == -2) {
     D("op 0, returning: %x\n", DX);
     return;
   }
