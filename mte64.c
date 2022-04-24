@@ -1645,7 +1645,7 @@ static void emit_ops() {
   // OP_POINTER?
   if (--AX == 0) {
     DH = ptr_reg;
-    D("op %s, returning: %x\n", op_to_str[AX + 2] DX);
+    D("op %s, returning: %x\n", op_to_str[AX + 2], DX);
     return;
   }
 
