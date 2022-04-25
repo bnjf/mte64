@@ -196,10 +196,10 @@ LOCAL const char *const reg_names[] = {
     // catch reg ref if we've masked it off
     [0x7f] = "PTR_REG",
     // normal assignments, with pending flag
-    [0x80 | REG_AX] "ax (signed)", [0x80 | REG_CX] "cx (signed)",
-    [0x80 | REG_DX] "dx (signed)", [0x80 | REG_BX] "bx (signed)",
-    [0x80 | REG_SP] "sp (signed)", [0x80 | REG_BP] "bp (signed)",
-    [0x80 | REG_SI] "si (signed)", [0x80 | REG_DI] "di (signed)",
+    [0x80 | REG_AX] = "ax (signed)", [0x80 | REG_CX] = "cx (signed)",
+    [0x80 | REG_DX] = "dx (signed)", [0x80 | REG_BX] = "bx (signed)",
+    [0x80 | REG_SP] = "sp (signed)", [0x80 | REG_BP] = "bp (signed)",
+    [0x80 | REG_SI] = "si (signed)", [0x80 | REG_DI] = "di (signed)",
     // reg ref
     [0xff] = "PTR_REG (signed)"};
 // }}}
@@ -208,6 +208,10 @@ LOCAL const char *const reg_names[] = {
 
 // 0x21 -> 0xf ops max
 // 0x80 is set on the op if it's the head
+//
+// [0] load, [0..(2**5 - 1)] ops, [N+1] store
+//
+// TODO config knob (e.g. 0x11, 0x21, 0x41, 0x81)
 LOCAL op_t ops[0x21];
 
 // when addressing this in byte mode recast as such
@@ -238,7 +242,7 @@ LOCAL uint8_t data_reg;
 LOCAL uint8_t last_op; // 0,0x8a,0xf7,0xc1,-1
 LOCAL uint8_t last_op_flag;
 LOCAL uint32_t patch_dummy; // this is only u8 in the original, and it
-// overlaps onto the push reserve space
+                            // overlaps onto the push reserve space
 LOCAL uint8_t decrypt_stage_pushes[8];
 LOCAL uint8_t decrypt_stage[MAX_ADD];
 LOCAL uint8_t encrypt_stage[MAX_ADD];
@@ -376,7 +380,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
   DI = (uintptr_t)&op_end_idx;
 
   ops[0] = OP_START_OR_END;
-  ops[1] = OP_START_OR_END | 0x80;
+  ops[1] = OP_START_OR_END | 0x80; // head op, reg init
 
   do {
     DX = random();
@@ -388,29 +392,32 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
     CH = ops[SI];
 
     if (CH == OP_MUL) {
-      AL = 0;
-      DL |= 1;
+      AL = 0;  // reg init
+      DL |= 1; // ensure argument is odd for mul inv
       goto save_op_idx;
     } else if (CH == (OP_MUL | 0x80)) {
       CL = 0; // OP_DATA;
       BX++;   // consume an op
-      dump_all_regs();
     }
 
     AL = AL & junk_len_mask;
     if (AL < BL) {
-      // commit arguments for ops
+      // commit arguments for ops {{{
       D("do register init BX=%x CX=%x\n", BX, CX);
+
+      // check if we're on a boundary
       BL = shr8(BL);
       if (!cpu_state.c)
         goto check_arg;
       cpu_state.z = CL == 0;
       if (cpu_state.z)
         goto last_op;
+
     check_arg:
       cpu_state.z = DL == 0;
+
     last_op:
-      AL = 0;
+      AL = 0; // reg load/store
       if (!cpu_state.z)
         goto save_op_idx;
       cpu_state.z = BP == 0;
@@ -418,7 +425,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
         DL |= 1;
         goto check_arg;
       }
-      AL = 2;
+      AL = 2; // data load/store
 
     save_op_idx:
       cpu_state.c = 0;
@@ -430,6 +437,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       }
       assert(SI < 0x21);
       ops[SI] = AL;
+      // }}}
     } else {
       // insert more ops {{{
       cpu_state.c = 0; // from CMP AL,BL @L480
@@ -490,7 +498,7 @@ static uint8_t _set_op_arg(int i, uint8_t arg) {
   return rv;
 }
 static void dump_ops_table() {
-  printf("ops table (i=%d, free=%d, next=%d, end=%d)\n", op_idx, op_free_idx,
+  printf("ops table (i=%hu, free=%d, next=%d, end=%d)\n", op_idx, op_free_idx,
          op_next_idx, op_end_idx);
   for (int i = 0; i <= op_free_idx; i++) {
     /*printf("%d\t%-10s (%x)\t%04x\n", i, op_to_str[ops[i] & 0x7f],
@@ -713,39 +721,66 @@ static void try_ptr_advance() {
   SWAP(AX, BX);
   DX = -2;
   AL = ops[BX];
+
+  // looking for OP_SUB or OP_ADD
   if (AL != 3 && AL != 4) {
     return;
   }
   if (AL == 4) {
     DX = -DX;
   }
+
+  // if we've got a
+  //   OP_{ADD,SUB} #load, #ptr_store
+  //   OP_{ADD,SUB} #ptr_store, #load
+  // then we set the load argument to 2 (or -2 depending on the op due to
+  // commutativity)
+  //
+  // ptr_reg_load = 2, n
+  // ptr_reg_store = 2, 0
+  // (this requires a ptr_reg_store argument to be 0)
+  //
+  // e.g.
+  //
+  //   (sub (reg_alloc ptr_reg_store))
+  //     ptr_reg = ptr_val; ptr_reg += val; reg -= val
+  //   (add (ptr_reg_store reg_alloc))
+  //     reg = val;         reg -= ptr_val; ptr += reg
+  //   (sub (ptr_reg_store reg_alloc)):
+  //     reg = val;         reg += ptr_val; ptr -= reg
+  //   (add (reg_alloc ptr_reg_store))
+  //     ptr_reg = ptr_val; ptr_reg -= val; reg += val
   BL <<= 1;
   PUSH(BX);
   BX++;
-  fix_arg();
+  fix_arg(); // right arg, add 2 or -2 if
   POP(BX);
   DX = 2;
-  fix_arg();
+  fix_arg(); // left arg
+  // returns CX=0 not found, or CX=-1 or -2 if found and adjusted
   return;
 }
 static void fix_arg() {
-  uint64_t _bx0 = BX;
-  assert(0);
-  BL = ((uint8_t *)&ops_args)[BX];
-  if (ops[BX] != OP_POINTER) {
+  // BL = ((uint8_t *)&ops_args)[BX];
+  assert(BX < 0x42);
+  BL = _get_op_arg(BX);
+
+  // only looking for reg init args
+  if (ops[BX] != 0) {
     return;
   }
+
+  // found a reg init
+
   SI = BX;
-  // [bx+si] to double in the original, not needed as we're storing words
-  DX += ops_args[BX];
+  DX += ops_args[BX]; // tally the args if we've got a reg init
+
   if (DL != 0) {
+    // is the argument already 2?
     return;
   }
-  if (CX) {
-    printf("try_ptr_advance OK: %s %s %llx -> %llx\n", op_to_str[ops[_bx0]],
-           op_to_str[ops[BX]], ops_args[BX], DX);
-  }
-  ops_args[BX] = DX;
+
+  ops_args[BX] = DX; // seg arg to 2
   CX--;
   return;
 }
@@ -1036,7 +1071,7 @@ static void exec_enc_stage() {
     // REPZ SCASW
     cpu_state.z = 1;
     while (CX--) {
-      if (*((uint16_t *)(DI++)) != AX) {
+      if (*((uint16_t *)(DI += (sizeof(jnz_patch_dec[0])))) != AX) {
         cpu_state.z = 0;
         break;
       }
@@ -1046,8 +1081,33 @@ static void exec_enc_stage() {
       POP(DX);
       return;
     }
+    D("found jnz @ %x (%p) si=%x\n",
+      DI - (sizeof(jnz_patch_dec[0])) - (uintptr_t)&jnz_patch_dec,
+      jnz_patch_dec[0x21 - CX], SI);
+    assert((((uint8_t *)(jnz_patch_dec[0x21 - CX]))[-1]) == 0x75);
     // TODO junk loops
-    assert(0);
+    assert(SI == 0);
+    if ((AX = jnz_patch_dec[0x21 - CX]) > 0) {
+      DX = 1;
+      SI = AX;
+      AX = jnz_patch_hits[0x21 - CX];
+      assert(BX == 1);
+      // if it's always taken, nuke the jnz loc
+      // if it's never taken, nuke the stuff between here and the dest
+      if (AX == BX || ((AL = *(uint8_t *)(SI++)), CBW(A), (DX = AX))) {
+        // BX == 1 here?
+        while (DX) {
+          D("trashing dx=%lx bytes\n", DX);
+          AX = random();
+#ifdef OP_JNZ_JUNK
+          *(uint8_t *)(SI++) = AL;
+#else
+          SI++;
+#endif
+          DX--;
+        }
+      }
+    }
   } while (1);
 
   POP(DX);
@@ -1087,6 +1147,7 @@ static void make_enc_and_dec() {
 
   // XXX moved this out of restart
   srandom(1);
+
   return restart();
 }
 
@@ -1144,7 +1205,7 @@ static void restart() {
 }
 
 static void make() {
-  STACK_INFO_INIT();
+  STACK_INFO_INIT(__func__);
 
   PUSH(AX); // -1 on first call (from the L188 al=-1)
   PUSH(BX);
@@ -1195,7 +1256,7 @@ static void make() {
   AX -= (uintptr_t)&patch_dummy;
   printf("ax1=%llx patch_dummy=%p\n", AX, &patch_dummy);
 
-  STACK_INFO();
+  STACK_INFO(__func__);
 
   if (AX < (uintptr_t)&patch_dummy) {
     // value on stack is make's initial AX, restart() pops it as BP
@@ -1203,7 +1264,7 @@ static void make() {
     // on restart entry
     // bp = previous phase, ax = current phase
     // phases: value to store -> -1 -> 0
-    STACK_INFO();
+    STACK_INFO(__func__);
     // stack should have an extra item XXX
     return restart();
   }
@@ -1215,8 +1276,8 @@ static void make() {
 
   POP(BX);
 
-  STACK_INFO();
-  STACK_CHECK();
+  STACK_INFO(__func__);
+  STACK_CHECK(__func__);
   return;
 }
 
@@ -1234,7 +1295,7 @@ static void g_code_no_mask() {
 }
 static void g_code_from_ops() {
   assert(generating_enc() || generating_dec());
-  STACK_INFO_INIT();
+  STACK_INFO_INIT(__func__);
   D("bp=%x\n", BP);
   PUSH(DI);
 
@@ -1316,10 +1377,10 @@ static void g_code_from_ops() {
             // add -> sub/neg
             BL = 0xf7;
             AL = 3; // OPCODE_F7_NEG
-            STACK_CHECK();
+            STACK_CHECK(__func__);
             return emit_eol_bl();
           }
-          STACK_CHECK();
+          STACK_CHECK(__func__);
           return single_ref();
         } else {
           // @@do_end_of_loop
@@ -1328,7 +1389,7 @@ static void g_code_from_ops() {
           AL = 0x87 + (AL & 2);
           SWAP(AX, BX);
           AL = DH;
-          STACK_INFO();
+          STACK_INFO(__func__);
           return emit_eol_bl();
         }
       } else {
@@ -1338,7 +1399,7 @@ static void g_code_from_ops() {
           DI -= 5;
           reg_set_dec[ptr_reg]--;
           BX = (uintptr_t)&patch_dummy;
-          STACK_INFO();
+          STACK_INFO(__func__);
           return size_ok();
         }
       }
@@ -1350,7 +1411,7 @@ static void g_code_from_ops() {
       }
       POP(AX);
       *((uint8_t *)DI) = 0xc3;
-      STACK_INFO();
+      STACK_INFO(__func__);
       return;
     }
     // }}}
@@ -1368,16 +1429,17 @@ static void g_code_from_ops() {
     BH = 0xff;
     encode_retf();
     // seems ok
-    STACK_INFO();
-    STACK_CHECK();
+    STACK_INFO(__func__);
+    STACK_CHECK(__func__);
     dump_ops_table();
     D("returning ax=%x bx=%x dx=%x (op_idx=%u) (op_arg=%x)\n", AX, BX, DX,
       op_idx, ops_args[ops_args[op_idx] & 0xff]);
     dump_all_regs();
     assert(AX == op_idx);
-    assert(BH == 0xff &&
-           // bl could also be the opcode
-           (BL == op_idx | BL == 0xf7 | BL == 0x81));
+    assert(
+        BH == 0xff &&
+        // bl could also be the opcode
+        (BL == op_idx | BL == 0xf7 | BL == 0x81 | BL == 0xc1 | BL == 0xd3));
     assert(
         // pointer init
         (SIGNBIT(DH) && DX == arg_size_neg) ||
@@ -1386,7 +1448,9 @@ static void g_code_from_ops() {
         // mul
         (BL == 0xf7 && DX == 0x2ba) ||
         // 81 ops
-        (BL == 0x81 && (DL & 0xc0) == 0xc0));
+        (BL == 0x81 && (DL & 0xc0) == 0xc0) ||
+        // rotates/shifts
+        ((BL == 0xc1 || BL == 0xd3) && DL == 0));
     return;
     // }}}
   }
@@ -1460,11 +1524,11 @@ static void encode_mrm_ptr() {
   return;
 }
 static void emit_eol_bl() {
-  STACK_INFO_INIT();
-  STACK_INFO();
+  STACK_INFO_INIT(__func__);
+  STACK_INFO(__func__);
   encode_mrm_ptr();
-  STACK_INFO();
-  STACK_CHECK();
+  STACK_INFO(__func__);
+  STACK_CHECK(__func__);
   D("bx=%llx generating_enc=%d generating_dec=%d\n", BX, generating_enc(),
     generating_dec());
   D("stack[.]=%llx stack[.-1]=%llx\n", *stackp, *(stackp - 1));
@@ -1633,6 +1697,7 @@ static void encode_retf() {
 
 static void mark_reg_used() {
   SWAP(AX, BX);
+  assert(BX < 8);
   reg_set_enc[BX]++;
   DH = AL;
   return store_data_reg();
@@ -1686,7 +1751,7 @@ static void emit_ops() {
 
   // walk right
   // D("at %x, heading to %x\n", BL, DH);
-  BL = DH; // op = upper(ops_args[i])
+  BL = DH; // op_idx = upper(ops_args[i])
   emit_ops();
 
   POP(BX);
@@ -1699,7 +1764,7 @@ static void emit_ops() {
 
   // L1204 {{{
   PUSH(AX);
-  PUSH(CX); // [0]
+  PUSH(CX); // [0] old DX, cur op args
 
   D("doing %s\n", op_to_str[AL + 2]);
   if (DL != 0 || DH != data_reg) {
@@ -1737,46 +1802,51 @@ static void emit_ops() {
     emitb(DH | 0x50); // PUSH
     BL = 0x80;
     if (CX == 0) {
+      // emit_ops::@@push_instead
       // exhausted?
-      goto push_instead;
+      DH = BL; // DH = 0x80
+      return store_data_reg();
     }
 
-    DI--;
-    CX--;
+    DI--; // rewind STOS
+    CX--; // decrement attempts
 
     AX = (AL + 1) & 7;
     BX = AX;
+    assert(BX < 8);
     AH = reg_set_enc[BX];
+    // try again if it's used
     if (AH == 0) {
-      // used?
       continue;
     }
 
-    // is the reg cx, and we've got a pending init?
+    // is the reg cx, and the right arg op is the head?
     if (BX-- == REG_CX) {
-      assert(0);
-      POP(BX); // CX from [^0]
+      POP(BX); // CX from [^0] (current ops_args)
       PUSH(BX);
       BX = BL; // BH = 0;
+      assert(BX < 0x21);
       AH = ops[BX];
       if (SIGNBIT(AH)) {
+        dump_ops_table();
+        abort();
         continue;
       }
     }
+
+    // reg ok
     break;
   } while (1);
-  // BX=reg
+
+  // AL=reg
 
   // 0x80 set on the op => OP_NEEDS_CX?  so we don't trash it before
   // firing off a shift or rotate
   emit_mov();
   return mark_reg_used();
   // }}}
-  // emit_ops::@@push_instead
-push_instead:
-  DH = BL;
-  return store_data_reg();
 }
+
 static void emit_ops_maybe_mul() {
   // L1410
   assert(!SIGNBIT(AL));
@@ -2033,7 +2103,9 @@ static void emit_ops_jnz() {
   emitb(AL);
   if (BP != -1) {
     if (generating_enc()) {
-      *((uint8_t *)DI - 1) += 0x57;
+      assert(*((uint8_t *)DI - 1) == 0x75);
+      // TODO int3 hook
+      //*((uint8_t *)DI - 1) += 0x57;
     }
     AX = DI;
     assert(BX < 0x21);
@@ -2046,51 +2118,57 @@ static void emit_ops_jnz() {
 
 // emit_ops::@store_data_reg
 static void store_data_reg() {
+  STACK_INFO_INIT(__func__);
+
   POP(BX);
+
   PUSH(DX);
 
-  D("emit ops @ %x\n", BL);
-  emit_ops(); // walk left
-  D("got arg %x\n", DX);
-  emit_mov_data();
-  POP(DX);
+  assert(BL < 0x21);
+  emit_ops();      // walk left
+  emit_mov_data(); // finalize
+
+  POP(DX); // this is meant to have our register
   POP(AX);
+
   last_op_flag = 0x80;
 
   if (AL == 0xc) {
     BX = DX;
-    // XXX prob should be on the 64-bit regs
     DX = DI - BX;
     *((uint8_t *)cpu_state.rbx - 1) = DL;
-    DH = data_reg;
-    DL = 0;
+    DX = data_reg << 8;
     return;
   }
 
   CH = AH;
   PUSH(AX);
   if (DL == 0) {
+    // reg op?
+
     dump_all_regs();
     D("stack: %x %x %x\n", stack[0], stackp[1], stackp[2]);
-    // assert((DH & 0x7f) < 8);
+
     if (DH == 0x80) {
-      // is it op 0 with a pending move?
-      AL = AL < 5 ? REG_DX : REG_CX;
-      DH = AL | 0x58;
+      // needed dx for mul or cx for shifts/rotates
+      AL = (AL - 5) < 4 ? REG_DX : REG_CX;
+      DH = AL;
+      AL |= 0x58; // POP reg
       emitb(AL);
     } else {
       // emit_ops::@@didnt_push
-      if ((DH & 0x80) == 0 && DH != ptr_reg) {
-        // BL = DH;
-        // BH = 0;
+
+      // nothing pending, we can free this register
+      if (!SIGNBIT(DH) && DH != ptr_reg) {
         BX = DH;
+        assert(BX < 8);
         reg_set_enc[BX]--;
       }
     }
   }
   // emit_ops::@@emit_op
 
-  POP(AX); // .. XXX this is writing to ptr_reg?!
+  POP(AX);
 
   BL = OPCODE_OR; // OR
   AL -= 9;
@@ -2284,7 +2362,7 @@ static void encrypt_target() {
   if (AX == 0) {
     DI = (uintptr_t)target_start;
   }
-  BX = (uintptr_t)decrypt_stage;
+  BX = (uintptr_t)&decrypt_stage_pushes[8]; // end
 
   PUSH(CX);
   PUSH(AX);
@@ -2292,6 +2370,7 @@ static void encrypt_target() {
   while (BX != DX) {
     BX--;
     AL = *((uint8_t *)BX) ^ 1;
+    assert(AL == 0x61 || (AL >= 0x50 && AL <= 0x57));
     if (AL != 0x61) {
       AL ^= 9; // POP reg
     }
@@ -2336,7 +2415,7 @@ static void encrypt_target() {
   // rep movsw
   D("moving %d words of payload from %p to %p\n", CX, SI, DI);
   while (CX--) {
-    //*((uint16_t*)(SI += 2)) = *((uint16_t*)(DI += 2));
+    // *((uint16_t*)(SI += 2)) = *((uint16_t*)(DI += 2));
     *((uint16_t *)(DI += 2)) = *((uint16_t *)(SI += 2));
   }
   return exec_enc_stage();
@@ -2393,31 +2472,10 @@ struct mut_output *mut_engine(struct mut_input *f_in,
 }
 
 static void dump_all_regs() {
-  // printf("=== encrypt_stage\n");
-  // for (int i = 0; i < 32 /*MAX_ADD*/; i++) {
-  //   printf("%02hx ", encrypt_stage[i]);
-  //   if ((i & 15) == 15) {
-  //     printf("\n");
-  //   }
-  // }
-  // printf("\n");
-  // printf("=== decrypt_stage\n");
-  // for (int i = 0; i < 32 /*MAX_ADD*/; i++) {
-  //   printf("%02hx ", encrypt_stage[i]);
-  //   if ((i & 15) == 15) {
-  //     printf("\n");
-  //   }
-  // }
-  // printf("ax=%08llx cx=%08llx dx=%08llx bx=%08llx\n", cpu_state.rax,
-  // cpu_state.rcx, cpu_state.rdx, cpu_state.rbx); printf("bp=%08llx
-  // sp=%08llx si=%08llx di=%08llx\n", cpu_state.rbp, cpu_state.rsp,
-  // cpu_state.rsi, cpu_state.rdi);
   printf("ax=%08llx bx=%08llx cx=%08llx dx=%08llx\n", cpu_state.rax,
          cpu_state.rbx, cpu_state.rcx, cpu_state.rdx);
   printf("sp=%08llx bp=%08llx si=%08llx di=%08llx\n", cpu_state.rsp,
          cpu_state.rbp, cpu_state.rsi, cpu_state.rdi);
-  // printf("stack=%08llx %08llx %08llx %08llx\n", *(stackp - 4), *(stackp -
-  // 3), *(stackp - 2), *(stackp - 1));
 }
 
 // TODO need some unit tests for shr8(), SIGNBIT, etc

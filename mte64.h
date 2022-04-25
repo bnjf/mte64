@@ -38,6 +38,7 @@ static void exec_enc_stage();
 static void emit_op_mrm();
 static void encode_mrm_ptr();
 static void encode_mrm_dh_s();
+static void dump_all_regs();
 static void emit_mov();
 static void emit_mov_data();
 static uint32_t emitd(uint32_t x);
@@ -59,7 +60,6 @@ static void dump_ops_table();
 static uint8_t _set_op_arg(int i,uint8_t arg);
 static uint8_t _get_op_arg(int i);
 static uint8_t shr8(uint8_t x);
-static void dump_all_regs();
 enum mut_routine_size_t {
   MUT_ROUTINE_SIZE_TINY = 0x1,
   MUT_ROUTINE_SIZE_SMALL = 0x3,
