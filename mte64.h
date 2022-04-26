@@ -18,17 +18,13 @@ enum reg16_t {
   REG_DI
 };
 typedef enum reg16_t reg16_t;
-enum reg8_t {
-  REG_AL = 0,
-  REG_CL,
-  REG_DL,
-  REG_BL,
-  REG_AH,
-  REG_CH,
-  REG_DH,
-  REG_BH
+enum mrm_mode_t {
+  MRM_MODE_INDEX = 0,
+  MRM_MODE_INDEX_DISP8,
+  MRM_MODE_INDEX_DISP32,
+  MRM_MODE_REGISTER
 };
-typedef enum reg8_t reg8_t;
+typedef enum mrm_mode_t mrm_mode_t;
 enum opcode_80_t {
   OPCODE_80_ADD = 0,
   OPCODE_80_OR,
@@ -50,30 +46,40 @@ enum opcode_f7_t {
   OPCODE_F7_IDIV
 };
 typedef enum opcode_f7_t opcode_f7_t;
-enum mrm_mode_t {
-  MRM_MODE_INDEX = 0,
-  MRM_MODE_INDEX_DISP8,
-  MRM_MODE_INDEX_DISP32,
-  MRM_MODE_REGISTER
+enum reg8_t {
+  REG_AL = 0,
+  REG_CL,
+  REG_DL,
+  REG_BL,
+  REG_AH,
+  REG_CH,
+  REG_DH,
+  REG_BH
 };
-typedef enum mrm_mode_t mrm_mode_t;
+typedef enum reg8_t reg8_t;
 union mrm_t {
   uint8_t byte;
   struct {
     // note to self: bitfields are right to left
-    union {
-      reg16_t reg : 3;
-      reg16_t reg0 : 3;
-      reg8_t reg_8 : 3;
-    };
-    union {
-      opcode_80_t op_80 : 3;
-      opcode_f7_t op_f7 : 3;
-      reg16_t reg1 : 3;
-      reg8_t reg1_8 : 3;
-    };
+    reg16_t reg : 3;
+    reg16_t reg1 : 3;
     mrm_mode_t mod : 2;
   };
+  struct {
+    reg16_t reg : 3;
+    opcode_80_t op : 3;
+    mrm_mode_t mod : 2;
+  } op_80;
+  struct {
+    reg16_t reg : 3;
+    opcode_f7_t op : 3;
+    mrm_mode_t mod : 2;
+  } op_f7;
+  struct {
+    reg8_t reg8 : 3;
+    reg8_t reg1_8 : 3;
+    mrm_mode_t : 2;
+  } mrm_8;
 };
 enum opcode_t {
   OPCODE_ADD = 0x03,

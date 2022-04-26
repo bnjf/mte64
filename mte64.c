@@ -165,19 +165,25 @@ union mrm_t {
   uint8_t byte;
   struct {
     // note to self: bitfields are right to left
-    union {
-      reg16_t reg : 3;
-      reg16_t reg0 : 3;
-      reg8_t reg_8 : 3;
-    };
-    union {
-      opcode_80_t op_80 : 3;
-      opcode_f7_t op_f7 : 3;
-      reg16_t reg1 : 3;
-      reg8_t reg1_8 : 3;
-    };
+    reg16_t reg : 3;
+    reg16_t reg1 : 3;
     mrm_mode_t mod : 2;
   };
+  struct {
+    reg16_t reg : 3;
+    opcode_80_t op : 3;
+    mrm_mode_t mod : 2;
+  } op_80;
+  struct {
+    reg16_t reg : 3;
+    opcode_f7_t op : 3;
+    mrm_mode_t mod : 2;
+  } op_f7;
+  struct {
+    reg8_t reg8 : 3;
+    reg8_t reg1_8 : 3;
+    mrm_mode_t : 2;
+  } mrm_8;
 };
 #endif
 // }}}
@@ -1551,7 +1557,8 @@ static void g_code_from_ops() {
 
 static void bl_op_reg_mrm() {
   // shifting the mode bit over 3 times, we shift it back in encode_op_mrm()
-  AL |= (mrm_t){.mod = 3 /*reg,reg*/}.byte >> 3;
+  AL |= (mrm_t){.mod = MRM_MODE_REGISTER}.byte >> 3;
+  assert((AL & (0xc0 >> 3)) == (0xc0 >> 3));
   SWAP(AX, BX);
   encode_op_mrm();
   return;
@@ -1891,7 +1898,9 @@ static void emit_ops() {
     if (last_op_flag & 0x40) {
       PUSH(AX);
       // 3 == mode reg reg
-      AH = AL | (mrm_t){.mod = 3, .op_f7 = OPCODE_F7_NEG, .reg = 0}.byte;
+      AH = AL |
+           (mrm_t){.op_f7.mod = MRM_MODE_REGISTER, .op_f7.op = OPCODE_F7_NEG}
+               .byte;
       AL = 0xf7;
       emitw(AX);
       POP(AX);
@@ -2033,9 +2042,9 @@ static void emit_ops_not_mul() {
     if ((is_8086 & AH) != 0) {
       // emit `AND CL,1Fh` for 8086
       emitb(AL); // emit 0x1f
-      AL = (mrm_t){.mod = 3 /*reg,reg,*/,
-                   .op_80 = OPCODE_80_AND,
-                   .reg = REG_CL}
+      AL = (mrm_t){.op_80.mod = MRM_MODE_REGISTER,
+                   .op_80.op = OPCODE_80_AND,
+                   .op_80.reg = REG_CL}
                .byte;
       emitw(AX); // emit MRM, 0x1f
       assert(0);
@@ -2089,8 +2098,7 @@ static void emit_ops_maybe_rol(int is_rotate) {
   }
 
   assert(DL > 0 && DL <= 0xf);
-  dump_ops_table();
-  dump_all_regs();
+  assert(DH == data_reg); // could be any reg
   assert(AH == 0xff || AH == 0x0 || AH == 1);
   if (DL != 1 && AH == is_8086) {
     // can encode imm8, if:
@@ -2161,6 +2169,7 @@ zero_dest:
   return;
 }
 
+// uses the data reg
 static void emit_ops_emit_bl() {
   DH = data_reg;
 
@@ -2247,7 +2256,8 @@ static void store_data_reg() {
   PUSH(DX);
 
   assert(BL < 0x21);
-  emit_ops();      // walk left
+  emit_ops(); // walk left
+  abort();
   emit_mov_data(); // finalize
 
   POP(DX); // this is meant to have our register
@@ -2409,9 +2419,9 @@ static void emit_81_ops() {
   // implied by the `or AL,AL` at entry (or clears c)
   cpu_state.c = 0;
   if (AL != 0) {
-    BL = (mrm_t){.mod = 3, // reg,reg
-                 .op_80 = (BL >> 3),
-                 .reg = AL}
+    BL = (mrm_t){.op_80.mod = MRM_MODE_REGISTER,
+                 .op_80.op = (BL >> 3),
+                 .op_80.reg = AL}
              .byte;
     AL = DL;
 
@@ -2576,6 +2586,14 @@ static void encrypt_target() {
 
 struct mut_output *mut_engine(struct mut_input *f_in,
                               struct mut_output *f_out) {
+  // test
+  // mrm_t m = (mrm_t){.mod = MRM_MODE_REGISTER, .reg1 = REG_CX, .reg =
+  // REG_CX}; D("%hx %hx %hx %hx\n", m.mod, m.reg1, m.reg, m.byte);
+  // D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER}.byte);
+  // D("%x\n", (mrm_t){.op_f7.mod = MRM_MODE_INDEX_DISP32, .op_f7 =
+  // OPCODE_F7_NEG}.byte); D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER, .op_f7
+  // = OPCODE_F7_NEG, .reg = REG_CX} .byte);
+
   // in = f_in;
   // out = f_out;
   stackp = stack + STACK_SIZE - 1;
