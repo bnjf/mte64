@@ -8,8 +8,8 @@ int main(int argc, char *argv[]) {
   mut_output out;
 
   for (int i = 0; i < 1; i++) {
-    in.code = "\x90\xc3";
-    in.len = 0x42;
+    in.code = (uint8_t *)"\x90\xc3";
+    in.len = 0x1111;
     in.exec_offset = 0;
     in.entry_offset = 0;
     in.payload_offset = 0;

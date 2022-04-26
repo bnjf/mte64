@@ -1,3 +1,7 @@
+#include <stdint.h>
+
+#include "mte64.h"
+
 #include <assert.h>
 #include <errno.h>
 #include <signal.h>
@@ -12,8 +16,6 @@
 
 // for dladdr()
 //#include <dlfcn.h>
-
-#include "mte64.h"
 
 // public stuff {{{
 #if INTERFACE
@@ -81,6 +83,7 @@ struct mut_output {
 
 // enums {{{
 #if LOCAL_INTERFACE
+enum reg_set_t { REG_SET_BUSY, REG_SET_AVAILABLE = 0xff };
 enum op_t {
   // loads and stores
   OP_DATA,         // mov ptr_reg,data_reg || mov data_reg,ptr_reg
@@ -152,25 +155,38 @@ enum reg8_t {
   REG_DH,
   REG_BH
 };
+enum mrm_mode_t {
+  MRM_MODE_INDEX = 0,
+  MRM_MODE_INDEX_DISP8,
+  MRM_MODE_INDEX_DISP32,
+  MRM_MODE_REGISTER
+};
 union mrm_t {
   uint8_t byte;
   struct {
     // note to self: bitfields are right to left
-    uint8_t reg : 3;
-    uint8_t op : 3;
-    uint8_t mod : 2;
+    union {
+      reg16_t reg : 3;
+      reg16_t reg0 : 3;
+      reg8_t reg_8 : 3;
+    };
+    union {
+      opcode_80_t op_80 : 3;
+      opcode_f7_t op_f7 : 3;
+      reg16_t reg1 : 3;
+      reg8_t reg1_8 : 3;
+    };
+    mrm_mode_t mod : 2;
   };
 };
 #endif
 // }}}
 
 // mappings {{{
-LOCAL const uint8_t const opcodes[] = {[OP_ADD] = OPCODE_ADD,
-                                       [OP_OR] = OPCODE_OR,
-                                       [OP_AND] = OPCODE_AND,
-                                       [OP_SUB] = OPCODE_SUB,
-                                       [OP_XOR] = OPCODE_XOR};
-LOCAL const char const *op_to_str[] = {
+// LOCAL const uint8_t const opcodes[] = {[OP_ADD] = OPCODE_ADD, [OP_OR] =
+// OPCODE_OR, [OP_AND] = OPCODE_AND, [OP_SUB] = OPCODE_SUB, [OP_XOR] =
+// OPCODE_XOR};
+LOCAL const char *op_to_str[] = {
     // data loads
     [OP_DATA] = "# =",
     [OP_START_OR_END] = "D =",
@@ -249,23 +265,54 @@ LOCAL uint8_t encrypt_stage[MAX_ADD];
 LOCAL uint8_t target_start[100000]; // XXX this should be caller supplied
 // }}}
 
-#define REG_IS_USED 0
-#define REG_IS_FREE 0xff
+// local prototypes for static funcs {{{
+static uint8_t _get_op_arg(int);
+static void dump_all_regs();
+static void dump_ops_tree_as_stack(int);
+static void emit_81_ops();
+static void emit_eol_bl();
+static void emit_f7_op();
+static void emit_mov();
+static void emit_op_mrm();
+static void emit_ops();
+static void emit_ops_emit_bl();
+static void emit_ops_jnz();
+static void emit_ops_maybe_rol();
+static void emit_ops_not_mul();
+static void encode_mrm_dh_s();
+static void encode_mrm_ptr();
+static void encode_op_mrm();
+static void encode_retf();
+static void fix_arg();
+static void g_code();
+static void g_code_from_ops();
+static void g_code_no_mask();
+static uint32_t get_arg_size();
+static void invert_ops_loop();
+static void make();
+static void patch();
+static void patch_offsets();
+static void ptr_and_r_sto();
+static void restart();
+static void save_op_done();
+static void single_ref();
+static void size_ok();
+static void store_data_reg();
+// }}}
 
 // stuff to help while we keep global state
 #define STACK_SIZE 512 // 256 not enough?
 LOCAL uint64_t stack[STACK_SIZE], *stackp = stack + STACK_SIZE - 1;
 #define STACK_INFO_INIT(x) int x##stackp0 = stackp - stack;
 #define STACK_INFO(x)                                                        \
-  D("stack now %i (was %i)\n", stackp - stack, x##stackp0);
+  D("stack now %li (was %i)\n", stackp - stack, x##stackp0);
 #define STACK_CHECK(x) assert(x##stackp0 == stackp - stack);
 #define STACK_UPDATE(x) x##stackp0 = stackp - stack;
 #define PUSH(reg) (assert(stackp > stack), *(--stackp) = (reg))
 #define POP(reg) (assert(stackp < stack + STACK_SIZE), (reg) = *(stackp++))
 
 // https://stackoverflow.com/questions/8938347/c-how-do-i-simulate-8086-registers
-LOCAL struct {
-  // global registers {{{
+LOCAL struct { // global registers {{{
   union {
     uint64_t rax;
     uint32_t eax;
@@ -366,10 +413,31 @@ LOCAL struct {
 #define GETLO(reg) ((reg)&0xff)
 #define GETHI(reg) (GETLO(((reg) >> 8)))
 #define SETLO(reg, val) (reg = GETHI(reg) | ((val)&0xff), val)
-#define SETHI(reg, val) (reg = (((val)&0xff) << 8) | GETLO(reg), val)
-#define CBW16(x) (x##H = (x##L & 0x80) ? 0xff : 0)
-#define CBW(x) (((x##X) = (((x##L) & 0x80) ? (~0xff) : 0) | (x##L)), x##H)
+#define SETHI(reg, val) ((reg = (((val)&0xff) << 8) | GETLO(reg)), val)
+//#define CBW16(x) (x##H = (x##L & 0x80) ? 0xff : 0)
+//#define CBW(x) (((x##X) = (((x##L) & 0x80) ? (~0xff) : 0) | (x##L)), x##H)
+#define CBW(x) (((x##X) = ((x##L) < 128 ? (x##L) : -(x##L))) >= 128U)
 #define SIGNBIT(x) ((typeof(x))((x) << 1) < (x))
+
+// some helper stuff for faking out condition flags {{{
+
+int is_parity_even(uint64_t x) { return __builtin_parity(x) == 0; }
+
+// shr imm8, and set flags
+static uint8_t shr8(uint8_t x) {
+  cpu_state.flags = (cpu_state.flags & 0xf0) | 0x2; // always on
+  cpu_state.c = x & 1;
+  cpu_state.o = (x & 0x80) == 0x80;
+  x >>= 1;
+  cpu_state.s = (x & 0x80) == 0x80;
+  cpu_state.z = BL == 0;
+  cpu_state.p = is_parity_even(x);
+  return x;
+}
+
+// }}}
+
+static uint32_t get_arg_size() { return -arg_size_neg; }
 
 static void make_ops_table(enum mut_routine_size_t routine_size) {
 
@@ -403,9 +471,10 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
     AL = AL & junk_len_mask;
     if (AL < BL) {
       // commit arguments for ops {{{
-      D("do register init BX=%x CX=%x\n", BX, CX);
+      D("do register init BX=%lx CX=%lx\n", BX, CX);
 
       // check if we're on a boundary
+      // i.e. doing the second arg from the op
       BL = shr8(BL);
       if (!cpu_state.c)
         goto check_arg;
@@ -443,8 +512,8 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       cpu_state.c = 0; // from CMP AL,BL @L480
 
       SWAP(AX, DX);
-      // because 12 isn't congruent to the wordsize, there's a very small bias
-      // towards 0..3 by 0.002%
+      // because 12 isn't congruent to the wordsize, there's a very small
+      // bias towards 0..3 by 0.002%
       AL = AL % 12;
 
       CH = CH & 0x80;
@@ -478,18 +547,12 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
   // dump_ops_table();
   // dump_ops_tree(op_end_idx << 1);
   // dump_ops_tree(op_end_idx, 1);
-  // dump_ops_tree_as_stack(op_idx);
+  dump_ops_tree_as_stack(op_idx);
   printf("\n");
 
   return;
 }
 
-static uint8_t _get_op_arg(int i) {
-  assert(i < 0x42);
-  assert(sizeof(ops_args[0]) == 4); // otherwise need to adjust the arith
-  uint8_t rv = ((uint8_t *)(&ops_args))[(i & -2) << 1 | (i & 1)];
-  return rv;
-}
 static uint8_t _set_op_arg(int i, uint8_t arg) {
   assert(i < 0x42);
   assert(sizeof(ops_args[0]) == 4); // otherwise need to adjust the arith
@@ -497,6 +560,13 @@ static uint8_t _set_op_arg(int i, uint8_t arg) {
   ((uint8_t *)(&ops_args))[(i & -2) << 1 | (i & 1)] = arg;
   return rv;
 }
+static uint8_t _get_op_arg(int i) {
+  assert(i < 0x42);
+  assert(sizeof(ops_args[0]) == 4); // otherwise need to adjust the arith
+  uint8_t rv = ((uint8_t *)(&ops_args))[(i & -2) << 1 | (i & 1)];
+  return rv;
+}
+
 static void dump_ops_table() {
   printf("ops table (i=%hu, free=%d, next=%d, end=%d)\n", op_idx, op_free_idx,
          op_next_idx, op_end_idx);
@@ -595,51 +665,82 @@ static void dump_ops_tree_as_stack(int i) {
  *
  */
 
-// returns op index in AX, or sets carry
+// finds a dependent by op reference
 static void get_op_loc() {
   assert(AL < 0x42); // AL is an index into ops_args
-  AX = AL;           // zero extend into ax
+  assert(AH == 0);
   BX = AX;
   AL >>= 1;     // index into ops
   CX = AX << 1; // args to scan (rounded)
+  DI = (uintptr_t)&ops_args[1];
 
-  for (int i = 2; i < CX; i++) {
-    if (ops[i >> 1] >= 3 && _get_op_arg(i) == AL) {
-      cpu_state.c = 0;
-      AX = i;
-      return;
+  dump_all_regs();
+  abort();
+  for (CX = AX << 1; CX > 0; CX--, DI++) {
+    if (_get_op_arg(BX) == AL) {
+      SI = (0x42 - CX) >> 1; // DI - &ops_args[1] >> 2 ;
+      if (ops[SI] >= 3) {
+        cpu_state.c = 0;
+        // returns SI=op# DI=addr_of_arg+1 CX=0x42-op# BX=op_arg#
+        AX = (0x42 - CX); // index into ops_args
+        return;
+      }
     }
   }
+  // couldn't find a reference
   cpu_state.c = 1;
   return;
 }
 
 static void invert_ops() {
   D("starting at idx=%u\n", op_end_idx);
-  AX = op_end_idx << 1;
+
+  AL = op_end_idx;
+  assert(AL <= 127);
+  (void)CBW(A);
+  AL <<= 1; // clearing the top bit off
+
   get_op_loc();
   if (cpu_state.c) {
-    D("not inverting! %x\n", AL);
+    D("couldn't find a dependent of op_end_idx=%x, returning!\n", AL);
     return;
   }
   op_idx = AL;
-  dump_ops_tree(0, 1);
-  dump_ops_tree(1, 1);
   invert_ops_loop();
-  dump_ops_table();
-  /*dump_ops_tree(6, 1);*/
-  /*dump_ops_tree(4, 1);*/
+  assert(0);
+  return;
 }
+
+// https://arxiv.org/pdf/2204.04342.pdf
+uint32_t integer_inverse(uint32_t a) {
+  assert(a % 2 == 1);
+  uint32_t x0 = (3 * a) ^ 2; // See section 5, formula 3.
+  uint32_t y = 1 - a * x0;
+  uint32_t x1 = x0 * (1 + y);
+  y *= y;
+  uint32_t x2 = x1 * (1 + y);
+  y *= y;
+  uint32_t x3 = x2 * (1 + y);
+  // only need 3 reps for u32:
+  // https://lemire.me/blog/2017/09/18/computing-the-inverse-of-odd-integers/
+  return x3;
+  y *= y;
+  uint32_t x4 = x3 * (1 + y);
+  return x4;
+}
+
 static void invert_ops_loop() {
   do {
     get_op_loc();
     if (cpu_state.c) {
+      // no more dependents, now do ops[0]
       AL = 0;
     }
     PUSH(AX);
     AL >>= 1;
     assert(BX < 0x42);
-    _set_op_arg(BX, AL);
+
+    _set_op_arg(BX, AL); // push down
 
     // emulate SHR's flag generation for the LAHF/SAHF
     BX = shr8(BL);
@@ -651,6 +752,7 @@ static void invert_ops_loop() {
     if (AL == OP_SUB) {
       cpu_state.flags8 = AH;
       if (cpu_state.c) {
+        // don't sub->add if we're on the second arg
         goto done;
       }
       AX++; // OP_SUB -> OP_ADD
@@ -660,24 +762,27 @@ static void invert_ops_loop() {
     else if (AL == OP_ADD) {
       cpu_state.flags8 = AH;
       if (cpu_state.c) {
-        // doing upper arg?
+        // doing second/upper arg?
         SI = BX;
+        // switch arguments
         uint8_t l = _get_op_arg(BX + SI), r = _get_op_arg(BX + SI + 1);
         _set_op_arg(BX + SI, r);
         _set_op_arg(BX + SI + 1, l);
       }
+      // invert add #x,#y as sub #x,#y (or #y,#x if the upper arg)
+      // sub
       AX--; // OP_ADD -> OP_SUB
       goto store;
     } else if (AL < 6) {
       goto done;
     } else if (AL != OP_MUL) {
-      D("inverting op @ %x: %s (%x) => %s (%x)\n", BX, op_to_str[AL], AL,
+      D("inverting op @ %lx: %s (%x) => %s (%x)\n", BX, op_to_str[AL], AL,
         op_to_str[AL ^ 0xf], AL ^ 0xf);
-      assert(AL < 9);
-      AL ^= 0xf; // toggle rol/ror
+      assert(AL < 9); // flipping only makes sense for ROL/ROR<>ROR/ROL
+      AL ^= 0xf;      // toggle rol/ror
       goto store;
     } else {
-      D("inverting op @ %x: %s (%x) arg=%x\n", BX, op_to_str[AL], AL,
+      D("inverting op @ %lx: %s (%x) arg=%x\n", BX, op_to_str[AL], AL,
         ops_args[BX]);
       assert(BX < 0x21);
       // BX = (ops_args[BX] >> 8) & 0xff;
@@ -686,7 +791,7 @@ static void invert_ops_loop() {
       SI = ops_args[BX];
       CX = AX = 0;
       ops_args[BX] = DI = DX = 1;
-      D("finding inverse of %x\n", SI);
+      D("finding inverse of %lx\n", SI);
       ops_args[BX] = integer_inverse(SI);
       assert((uint32_t)(ops_args[BX] * SI) == 1);
       SI = DX = 0;
@@ -700,18 +805,6 @@ static void invert_ops_loop() {
 
   op_idx >>= 1; // back to byte/word index
   return;
-}
-
-// shr imm8, and set flags
-static uint8_t shr8(uint8_t x) {
-  cpu_state.flags = (cpu_state.flags & 0xf0) | 0x2; // always on
-  cpu_state.c = x & 1;
-  cpu_state.o = (x & 0x80) == 0x80;
-  x >>= 1;
-  cpu_state.s = (x & 0x80) == 0x80;
-  cpu_state.z = BL == 0;
-  cpu_state.p = is_parity_even(x);
-  return x;
 }
 
 static void try_ptr_advance() {
@@ -795,7 +888,7 @@ static uint32_t get_op_args(uint8_t i) {
   BX = ops_args[BX];
   if (DL < 3) {
     // terminal node
-    D("%s %x\n", op_to_str[DL], BX);
+    D("%s %lx\n", op_to_str[DL], BX);
     return BX;
   }
 
@@ -882,18 +975,17 @@ static int generating_dec() {
 
 // emits for byte/word/dword {{{
 static uint8_t emitb(uint8_t x) {
-  /*Dl_info info;                         */
-  /*if (!dladdr((uintptr_t *)DI, &info)) {*/
-  /*  abort();                            */
-  /*}                                     */
   char where[32] = {"*DI"};
 
   if (DI >= (uintptr_t)encrypt_stage &&
-      DI <= (uintptr_t)encrypt_stage + MAX_ADD) {
-    sprintf(where, "enc[%u]", DI - (uintptr_t)encrypt_stage);
+      DI < (uintptr_t)encrypt_stage + MAX_ADD) {
+    sprintf(where, "enc[%lu]", DI - (uintptr_t)encrypt_stage);
   } else if (DI >= (uintptr_t)decrypt_stage &&
-             DI <= (uintptr_t)decrypt_stage + MAX_ADD) {
-    sprintf(where, "dec[%u]", DI - (uintptr_t)decrypt_stage);
+             DI < (uintptr_t)decrypt_stage + MAX_ADD) {
+    sprintf(where, "dec[%lu]", DI - (uintptr_t)decrypt_stage);
+  } else if (DI >= (uintptr_t)target_start &&
+             DI < (uintptr_t)target_start + MAX_ADD) {
+    sprintf(where, "target[%lu]", DI - (uintptr_t)target_start);
   }
   D("%s = %x\n", where, x);
   *((uint8_t *)cpu_state.rdi) = x;
@@ -917,12 +1009,13 @@ static uint32_t emitd(uint32_t x) {
 static void emit_mov_data() {
   AL = data_reg;
   // printf("emit_mov_data: AX=%x DX=%x\n", AX, DX);
-  return emit_mov();
+  emit_mov();
+  return;
 }
 // lower byte of val == 0 then encode mov reg,reg instead
 static void emit_mov() {
   // AX = AL;
-  CBW(A);
+  (void)CBW(A);
   PUSH(AX);
 
   // XXX AL=DH, move from ops_args?
@@ -930,15 +1023,15 @@ static void emit_mov() {
   D("# ptr_reg=%s/%x data_reg=%s/%x\n", reg_names[ptr_reg], ptr_reg,
     reg_names[data_reg], data_reg);
   if (AL == DH) {
-    D("XXX ptr_reg = %x (%x)\n", ops_args[_get_op_arg((DL >> 2) | (DL & 1))],
-      DX);
-    dump_all_regs();
+    D("XXX ptr_reg = %x (*%lx)\n",
+      ops_args[_get_op_arg((DL >> 2) | (DL & 1))], DX);
     // XXX hackhackhack
-    DX = ops_args[_get_op_arg((DL >> 2) | (DL & 1))];
-    AL = ptr_reg;
-    // abort(); // we're missing a dl<>dh somewhere
+    // DX = ops_args[_get_op_arg((DL >> 2) | (DL & 1))];
+    // AL = ptr_reg;
+    // we _WERE_ missing a dl<>dh somewhere
+    // i messed up `save_op_done` in a couple of places, fixed in 637fd27
   } else if (DL != 0) {
-    D("P = %x (%x)\n", DX, AL);
+    D("P = %lx (%x)\n", DX, AL);
   } else {
     D("register %s = %s\n", reg_names[AL], reg_names[DH]);
   }
@@ -962,7 +1055,7 @@ static void emit_mov() {
     // ... and BX<=>AX
   }
   assert(AL < 8);
-  D("mov %s,%x\n", reg_names[AL], DX);
+  D("mov %s,%lx\n", reg_names[AL], DX);
   AL = 0xb8 | AL;
   emitb(AL);
   SWAP(AX, DX);
@@ -978,27 +1071,11 @@ static void encode_mrm_dh_s() {
     // BP = -1: do op=BL ptr_reg,reg
     // BP =  0: do op=BL [ptr_reg],reg
     // BP != 0: DX=BP, BP=DI+1, C=1
-    return encode_mrm_ptr();
+    encode_mrm_ptr();
+    return;
   }
-  return emit_op_mrm();
-}
-
-// https://arxiv.org/pdf/2204.04342.pdf
-uint32_t integer_inverse(uint32_t a) {
-  assert(a % 2 == 1);
-  uint32_t x0 = (3 * a) ^ 2; // See section 5, formula 3.
-  uint32_t y = 1 - a * x0;
-  uint32_t x1 = x0 * (1 + y);
-  y *= y;
-  uint32_t x2 = x1 * (1 + y);
-  y *= y;
-  uint32_t x3 = x2 * (1 + y);
-  // only need 3 reps for u32:
-  // https://lemire.me/blog/2017/09/18/computing-the-inverse-of-odd-integers/
-  return x3;
-  y *= y;
-  uint32_t x4 = x3 * (1 + y);
-  return x4;
+  emit_op_mrm();
+  return;
 }
 
 //__attribute__((optimize("omit-frame-pointer")))
@@ -1036,7 +1113,9 @@ static void exec_enc_stage() {
 
   // bp is used unless we've got omit-frame-pointer when compiling, and
   // can't be listed in clobbers.  hack around a bit and do our own saves.
-  printf("%s:%u %s ax=%llx bp=%llx\n", __FILE__, __LINE__, __func__, AX, BP);
+  D("ax=%lx bp=%lx\n", AX, BP);
+  uint64_t ax0 = AX, bp0 = BP;
+
   asm("push %%rbp\n\t"
       "movq %0,%%rax\n\t"
       "movq %1,%%rbp\n\t"
@@ -1048,7 +1127,8 @@ static void exec_enc_stage() {
       : "%rax"(AX), "r"(BP)                                  // in
       : "%rax", "%rcx", "%rdx", "%rbx", "%rsi", "%rdi", "cc" // clobbers
   );
-  printf("%s:%u %s ax=%llx bp=%llx\n", __FILE__, __LINE__, __func__, AX, BP);
+  assert(ax0 == BP && bp0 == AX);
+  D("ax=%lx bp=%lx\n", AX, BP);
 
   // reset perms
   if (mprotect((uintptr_t *)(page * pagesize), MAX_ADD * 2,
@@ -1081,9 +1161,9 @@ static void exec_enc_stage() {
       POP(DX);
       return;
     }
-    D("found jnz @ %x (%p) si=%x\n",
-      DI - (sizeof(jnz_patch_dec[0])) - (uintptr_t)&jnz_patch_dec,
-      jnz_patch_dec[0x21 - CX], SI);
+    D("found jnz @ %lx (%p) si=%lx\n",
+      (DI - (sizeof(jnz_patch_dec[0])) - (uintptr_t)&jnz_patch_dec),
+      (void *)jnz_patch_dec[0x21 - CX], SI);
     assert((((uint8_t *)(jnz_patch_dec[0x21 - CX]))[-1]) == 0x75);
     // TODO junk loops
     assert(SI == 0);
@@ -1094,7 +1174,7 @@ static void exec_enc_stage() {
       assert(BX == 1);
       // if it's always taken, nuke the jnz loc
       // if it's never taken, nuke the stuff between here and the dest
-      if (AX == BX || ((AL = *(uint8_t *)(SI++)), CBW(A), (DX = AX))) {
+      if (AX == BX || ((AL = *(uint8_t *)(SI++)), (void)CBW(A), (DX = AX))) {
         // BX == 1 here?
         while (DX) {
           D("trashing dx=%lx bytes\n", DX);
@@ -1113,8 +1193,6 @@ static void exec_enc_stage() {
   POP(DX);
   return;
 }
-
-static uint32_t get_arg_size() { return -arg_size_neg; }
 
 static void make_enc_and_dec() {
   CX += MAX_ADD_LEN - 5; // MAX_ADD_LEN - JMP NEAR (was 3)
@@ -1148,7 +1226,8 @@ static void make_enc_and_dec() {
   // XXX moved this out of restart
   srandom(1);
 
-  return restart();
+  restart();
+  return;
 }
 
 // LOCAL long seed = 1;
@@ -1177,8 +1256,8 @@ static void restart() {
   DI -= 1;
   if (DI != (uintptr_t)&decrypt_stage) {
     // printf("decrypt_stage len currently %p,%p\n", &decrypt_stage, DI);
-    printf("decrypt_stage len currently %p\n",
-           DI - (uintptr_t)&decrypt_stage);
+    D("decrypt_stage len currently %p\n",
+      (void *)(DI - (uintptr_t)&decrypt_stage));
     PUSH(DX);
     PUSH(DI);
 
@@ -1201,7 +1280,8 @@ static void restart() {
   STACK_INFO(__func__);
   // STACK_CHECK(__func__);
 
-  return make();
+  make();
+  return;
 }
 
 static void make() {
@@ -1223,7 +1303,9 @@ static void make() {
   DI = (uintptr_t)&op_idx;
 
   PUSH(arg_flags);
-  SETHI(arg_flags, MUT_FLAGS_CS_IS_NOT_SS >> 8);
+  // in the original, while execing the encrypter SS was the caller's SS,
+  // so we'd emit a segment override.  not needed nowadays.
+  arg_flags = MUT_FLAGS_CS_IS_NOT_SS | (arg_flags & 0xff);
 
   DX = arg_size_neg;
   DI = (uintptr_t)&encrypt_stage;
@@ -1239,7 +1321,7 @@ static void make() {
   POP(DI);
   POP(DX);
 
-  SETHI(arg_flags, AL);
+  arg_flags = AH | (arg_flags & 0xff); // restore arg_flags
   AL &= 1;
   is_8086 -= AL; // -> 0xff or 0x1f
   PUSH(AX);
@@ -1251,10 +1333,12 @@ static void make() {
 
   AX = BX;
   POP(BX);
-  D("ax0=%llx sign=%u ", AX, SIGNBIT(AH));
-  AX = ((-SIGNBIT(AH)) & ~0xffff) | AX; // sign extend
+  D("ax0=%lx sign=%u ", AX, SIGNBIT(AH));
+  // AX = ((-SIGNBIT(AH)) & ~0xffff) | AX; // sign extend
+  (void)CBW(A);
+
   AX -= (uintptr_t)&patch_dummy;
-  printf("ax1=%llx patch_dummy=%p\n", AX, &patch_dummy);
+  printf("ax1=%lx patch_dummy=%p\n", AX, (void *)&patch_dummy);
 
   STACK_INFO(__func__);
 
@@ -1266,12 +1350,14 @@ static void make() {
     // phases: value to store -> -1 -> 0
     STACK_INFO(__func__);
     // stack should have an extra item XXX
-    return restart();
+    restart();
+    return;
   }
   if (AX == 0 && arg_start_off != 0) {
     assert(0);
     // value on stack is make's initial AX
-    return restart();
+    restart();
+    return;
   }
 
   POP(BX);
@@ -1283,7 +1369,8 @@ static void make() {
 
 static void g_code() {
   junk_len_mask = BL;
-  return g_code_no_mask();
+  g_code_no_mask();
+  return;
 }
 static void g_code_no_mask() {
   PUSH(DX);
@@ -1291,12 +1378,13 @@ static void g_code_no_mask() {
   make_ops_table(BX);
   POP(DI);
   POP(DX);
-  return g_code_from_ops();
+  g_code_from_ops();
+  return;
 }
 static void g_code_from_ops() {
   assert(generating_enc() || generating_dec());
   STACK_INFO_INIT(__func__);
-  D("bp=%x\n", BP);
+  D("bp=%lx\n", BP);
   PUSH(DI);
 
   // init register tracking for enc {{{
@@ -1356,7 +1444,7 @@ static void g_code_from_ops() {
       POP(CX);
       BP--;
 
-      D("patch points: %p, %p\n", op_off_patch, &patch_dummy);
+      D("patch points: %p, %p\n", (void *)op_off_patch, (void *)&patch_dummy);
       AX = op_off_patch;
       op_off_patch = (uintptr_t)&patch_dummy;
 
@@ -1365,8 +1453,9 @@ static void g_code_from_ops() {
         PUSH(CX);
         PUSH(AX); // offset to patch
         AL = last_op_flag;
-        D("al=%x bp=%x\n", AL, BP);
-        if ((AL & 0b10110111) == 0b10000111 && BP == arg_start_off) {
+        D("al=%x bp=%lx\n", AL, BP);
+        // if ((AL & 0b10110111) == 0b10000111 && BP == arg_start_off) {
+        if ((AL & 0xb7) == 0x87 && BP == arg_start_off) {
           // flip direction
           D("flipping %x to %x\n", *((uint8_t *)DI - 6) ^ 2,
             *((uint8_t *)DI - 6));
@@ -1378,10 +1467,12 @@ static void g_code_from_ops() {
             BL = 0xf7;
             AL = 3; // OPCODE_F7_NEG
             STACK_CHECK(__func__);
-            return emit_eol_bl();
+            emit_eol_bl();
+            return;
           }
           STACK_CHECK(__func__);
-          return single_ref();
+          single_ref();
+          return;
         } else {
           // @@do_end_of_loop
           // emit the store, doesn't matter if we MOV or XCHG
@@ -1390,7 +1481,8 @@ static void g_code_from_ops() {
           SWAP(AX, BX);
           AL = DH;
           STACK_INFO(__func__);
-          return emit_eol_bl();
+          emit_eol_bl();
+          return;
         }
       } else {
         // null?
@@ -1400,7 +1492,8 @@ static void g_code_from_ops() {
           reg_set_dec[ptr_reg]--;
           BX = (uintptr_t)&patch_dummy;
           STACK_INFO(__func__);
-          return size_ok();
+          size_ok();
+          return;
         }
       }
       // }}}
@@ -1432,14 +1525,14 @@ static void g_code_from_ops() {
     STACK_INFO(__func__);
     STACK_CHECK(__func__);
     dump_ops_table();
-    D("returning ax=%x bx=%x dx=%x (op_idx=%u) (op_arg=%x)\n", AX, BX, DX,
+    D("returning ax=%lx bx=%lx dx=%lx (op_idx=%u) (op_arg=%x)\n", AX, BX, DX,
       op_idx, ops_args[ops_args[op_idx] & 0xff]);
     dump_all_regs();
     assert(AX == op_idx);
-    assert(
-        BH == 0xff &&
-        // bl could also be the opcode
-        (BL == op_idx | BL == 0xf7 | BL == 0x81 | BL == 0xc1 | BL == 0xd3));
+    assert(BH == 0xff &&
+           // bl could also be the opcode
+           (BL == op_idx || BL == 0xf7 || BL == 0x81 || BL == 0xc1 ||
+            BL == 0xd3));
     assert(
         // pointer init
         (SIGNBIT(DH) && DX == arg_size_neg) ||
@@ -1448,18 +1541,20 @@ static void g_code_from_ops() {
         // mul
         (BL == 0xf7 && DX == 0x2ba) ||
         // 81 ops
-        (BL == 0x81 && (DL & 0xc0) == 0xc0) ||
-        // rotates/shifts
-        ((BL == 0xc1 || BL == 0xd3) && DL == 0));
+        (BL == 0x81 ||
+         /* rotates/shifts */
+         BL == 0xc1 || BL == 0xd3));
     return;
     // }}}
   }
 }
 
 static void bl_op_reg_mrm() {
-  AL |= 0b00011000;
+  // shifting the mode bit over 3 times, we shift it back in encode_op_mrm()
+  AL |= (mrm_t){.mod = 3 /*reg,reg*/}.byte >> 3;
   SWAP(AX, BX);
-  return encode_op_mrm();
+  encode_op_mrm();
+  return;
 }
 static void encode_op_mrm() {
   emitb(AL);
@@ -1476,16 +1571,19 @@ static void encode_op_mrm() {
 
 static void encode_mrm() {
   if ((DH & 0x80) == 0) {
-    return bl_op_reg_mrm();
+    bl_op_reg_mrm();
+    return;
   }
-  return encode_mrm_ptr();
+  encode_mrm_ptr();
+  return;
 }
 static void encode_mrm_ptr() {
   DH = ptr_reg;
   // D("reg=%x op=%x val=%x (bp=%x)\n", DH, BL, DX, BP);
   cpu_state.c = 0;
   if (BP == -1) {
-    return bl_op_reg_mrm();
+    bl_op_reg_mrm();
+    return;
   } else if (BP != 0) {
     // D("staging memory load\n");
     DX = BP;
@@ -1519,7 +1617,7 @@ static void encode_mrm_ptr() {
   encode_op_mrm();
 
   op_off_patch = DI;
-  D("saved patch point %p\n", op_off_patch);
+  D("saved patch point %p\n", (void *)op_off_patch);
   emitd(AX);
   return;
 }
@@ -1529,10 +1627,11 @@ static void emit_eol_bl() {
   encode_mrm_ptr();
   STACK_INFO(__func__);
   STACK_CHECK(__func__);
-  D("bx=%llx generating_enc=%d generating_dec=%d\n", BX, generating_enc(),
+  D("bx=%lx generating_enc=%d generating_dec=%d\n", BX, generating_enc(),
     generating_dec());
-  D("stack[.]=%llx stack[.-1]=%llx\n", *stackp, *(stackp - 1));
-  return single_ref();
+  D("stack[.]=%lx stack[.+1]=%lx\n", *stackp, *(stackp + 1));
+  single_ref();
+  return;
 }
 static void single_ref() {
 
@@ -1596,7 +1695,7 @@ emit_jnz:
   CX = AX;          // cx=start of loop
   AX = AX - DI - 1; // ax=rel8 (1 ahead because we already STOSB)
   emitb(AL);
-  D("bx=%x cx=%x\n", BX, AX);
+  D("bx=%lx cx=%lx\n", BX, AX);
 
   // loop start is > 126 bytes, can't encode a backward jump
   // TODO encode JNZ NEAR instead: 0F 85 rel32
@@ -1604,7 +1703,8 @@ emit_jnz:
     BX = 0;
     return;
   }
-  return size_ok();
+  size_ok();
+  return;
 }
 
 static void size_ok() {
@@ -1612,8 +1712,9 @@ static void size_ok() {
   PUSH(CX);
   DX = (uintptr_t)&target_start;
   if (generating_enc()) {
-    D("generating enc, patching offsets (bx=%llx)\n", BX);
-    return patch_offsets();
+    D("generating enc, patching offsets (bx=%lx)\n", BX);
+    patch_offsets();
+    return;
   }
   PUSH(BX);
 
@@ -1649,7 +1750,7 @@ static void size_ok() {
   }
   // @@pushes_done
   POP(BP);
-  printf("[%s] %x\n", __func__, BP);
+  D("bp=%lx\n", BP);
 
   CX = BP - DI;
   if (arg_code_entry != 0) {
@@ -1665,12 +1766,13 @@ static void size_ok() {
   if (arg_start_off == 0) {
     DX = AX;
   }
-  return patch_offsets();
+  patch_offsets();
+  return;
 }
 
 static void patch_offsets() {
   // printf("patch_offsets(): BX=%llx\n", cpu_state.rbx);
-  D("patching %p and %p\n", BX, op_off_patch);
+  D("patching %p and %p\n", (void *)BX, (void *)op_off_patch);
   AX = DX;
   patch();
   AX = DX;
@@ -1681,9 +1783,10 @@ static void patch_offsets() {
 
 static void patch() {
   AX = AX - arg_size_neg;
+  assert(BX != 0);
   if (BX == 0) {
     // in the original this would've just zapped the first two ops
-    D("got null patch point?! bx=%x ax=%x\n", BX, AX);
+    D("got null patch point?! bx=%lx ax=%lx\n", BX, AX);
     assert(0);
     return;
   }
@@ -1700,7 +1803,8 @@ static void mark_reg_used() {
   assert(BX < 8);
   reg_set_enc[BX]++;
   DH = AL;
-  return store_data_reg();
+  store_data_reg();
+  return;
 }
 
 static void emit_ops() {
@@ -1713,7 +1817,7 @@ static void emit_ops() {
   AX &= 0x7f;
   BL <<= 1; // unmask the op_idx and prepare to index ops_args
 
-  D("got ax=%x bx=%x\n", AX, BX);
+  D("got ax=%lx bx=%lx\n", AX, BX);
   if (AL < 3) {
     D("got init: %s (%x)\n", op_to_str[AL], ops_args[BX >> 1]);
   } else {
@@ -1725,23 +1829,23 @@ static void emit_ops() {
   // DX = -1 & ~0xff; // 0xff00; // aux reg into ax
   // DH = 0xff; DL = 0;
   DX = ~0xff;
-  D("eh? dx=%x\n", DX);
+  D("eh? dx=%lx\n", DX);
   if (--AX == 0) {
-    D("op %s, returning: %x\n", op_to_str[AX + 1], DX);
+    D("op %s, returning: %lx\n", op_to_str[AX + 1], DX);
     return;
   }
 
   // OP_POINTER?
   if (--AX == 0) {
     DH = ptr_reg;
-    D("op %s, returning: %x\n", op_to_str[AX + 2], DX);
+    D("op %s, returning: %lx\n", op_to_str[AX + 2], DX);
     return;
   }
 
   // OP_REG_INIT
   DX = ops_args[BX / 2];
   if (AX == -2) {
-    D("op %s, returning: %x\n", op_to_str[AX + 3], DX);
+    D("op %s, returning: %lx\n", op_to_str[AX + 3], DX);
     return;
   }
 
@@ -1759,7 +1863,8 @@ static void emit_ops() {
   POP(AX);
 
   if (AL == 0xc) {
-    return emit_ops_jnz();
+    emit_ops_jnz();
+    return;
   }
 
   // L1204 {{{
@@ -1768,7 +1873,8 @@ static void emit_ops() {
 
   D("doing %s\n", op_to_str[AL + 2]);
   if (DL != 0 || DH != data_reg) {
-    return store_data_reg();
+    store_data_reg();
+    return;
   }
 
   AL = last_op_flag;
@@ -1785,12 +1891,13 @@ static void emit_ops() {
     if (last_op_flag & 0x40) {
       PUSH(AX);
       // 3 == mode reg reg
-      AH = AL | (mrm_t){.mod = 3, .op = OPCODE_F7_NEG, .reg = 0}.byte;
+      AH = AL | (mrm_t){.mod = 3, .op_f7 = OPCODE_F7_NEG, .reg = 0}.byte;
       AL = 0xf7;
       emitw(AX);
       POP(AX);
     }
-    return mark_reg_used();
+    mark_reg_used();
+    return;
   }
   // }}}
 
@@ -1805,7 +1912,8 @@ static void emit_ops() {
       // emit_ops::@@push_instead
       // exhausted?
       DH = BL; // DH = 0x80
-      return store_data_reg();
+      store_data_reg();
+      return;
     }
 
     DI--; // rewind STOS
@@ -1843,7 +1951,8 @@ static void emit_ops() {
   // 0x80 set on the op => OP_NEEDS_CX?  so we don't trash it before
   // firing off a shift or rotate
   emit_mov();
-  return mark_reg_used();
+  mark_reg_used();
+  return;
   // }}}
 }
 
@@ -1855,7 +1964,8 @@ static void emit_ops_maybe_mul() {
     CX++; // OPCODE_F7_IMUL
     if (AL != 7) {
       AX++;
-      return emit_ops_not_mul();
+      emit_ops_not_mul();
+      return;
     }
   }
 
@@ -1871,7 +1981,8 @@ static void emit_ops_maybe_mul() {
     emitd(AX);
   }
   SWAP(AX, CX);
-  return emit_f7_op();
+  emit_f7_op();
+  return;
   // }}}
 }
 
@@ -1887,12 +1998,14 @@ static void emit_ops_not_mul() {
   }
   int save_carry = cpu_state.c; // flag: rotate or shift
 
-  D("al=%x\n", AX);
+  D("al=%lx\n", AX);
   if (DL != 0) {
     // if dl == 0 it's a reg shift/rotate
-    return emit_ops_maybe_rol(save_carry);
+    emit_ops_maybe_rol(save_carry);
+    return;
   }
 
+  // L1479
   // need to init CX first {{{
   PUSH(AX);
   // if we used BX in the last op we can generate `MOV CL,BL`, otherwise do
@@ -1905,7 +2018,7 @@ static void emit_ops_not_mul() {
     // XXX are we saying that if BX is used BL will be & 01f?
     BL = 0x8b; // OPCODE_MOV_REG_MRM16
   }
-  D("emitting bl=%x al=%x dx=%x\n", BL, AL, DX);
+  D("emitting bl=%x al=%x dx=%lx\n", BL, AL, DX);
   emit_op_mrm();
   POP(AX); // 0:rol, 1:ror, 4:shl, shr:5
   assert(AL == 0 || AL == 1 || AL == 4 || AL == 5);
@@ -1920,7 +2033,10 @@ static void emit_ops_not_mul() {
     if ((is_8086 & AH) != 0) {
       // emit `AND CL,1Fh` for 8086
       emitb(AL); // emit 0x1f
-      AL = (mrm_t){.mod = 0b11, .op = OPCODE_80_AND, .reg = REG_CL}.byte;
+      AL = (mrm_t){.mod = 3 /*reg,reg,*/,
+                   .op_80 = OPCODE_80_AND,
+                   .reg = REG_CL}
+               .byte;
       emitw(AX); // emit MRM, 0x1f
       assert(0);
     }
@@ -1931,7 +2047,8 @@ static void emit_ops_not_mul() {
   // 0xd3 series ops: ROL/ROR/RCL/RCR/SHL/SHR/SAL/SAR arg,CL
   BL = 0xd3;
   DL = REG_CL;
-  return emit_ops_emit_bl();
+  emit_ops_emit_bl();
+  return;
 }
 static void emit_ops_maybe_rol(int is_rotate) {
 
@@ -1951,12 +2068,10 @@ static void emit_ops_maybe_rol(int is_rotate) {
     // 0xff 286+, generating decrypter
 
     if ((DL & 8)) {
-      // optimize the rotate!
       DL = -DL;
       AL ^= 1; // rol,ror -> ror,rol
-      // why isn't this done in invert_ops_table()?
-      // we're optimizing ops from the table (the same is done for small
-      // add/subs and xor -1)
+      // we're optimizing rotate ops from the table (the same is done for
+      // small add/subs and xor -1)
     }
   }
 
@@ -1983,8 +2098,9 @@ static void emit_ops_maybe_rol(int is_rotate) {
     // arg > 1
     // and on 286+
     D("emit %x %x %x\n", BL, 0xc0 | (AL << 3) | DH, DL);
-    return emit_ops_emit_bl(); // reg,reg
+    emit_ops_emit_bl(); // reg,reg
     // returns cl=3 di+=2 al=(0xc0|(al<<3)|dh), dl=data_reg
+    return;
   }
 
   // ROL/ROR/SHL/SHR arg,1
@@ -1994,7 +2110,8 @@ static void emit_ops_maybe_rol(int is_rotate) {
     // if it's rotate by 1..2, generate two ops?
     // rol/ror/shl/shr ax/cx/dx,1
     assert(AL == 0 || AL == 1 || AL == 4 || AL == 5);
-    return emit_ops_emit_bl(); // reg,reg
+    emit_ops_emit_bl(); // reg,reg
+    return;
   }
 
   // otherwise we need to generate `MOV CL,imm8`
@@ -2002,13 +2119,14 @@ static void emit_ops_maybe_rol(int is_rotate) {
   AL = 0xb1; // MOV CL,imm8
   AH = DL;
   emitw(AX);
-dont_mask_cl:
   POP(AX);
+
   BL = 0xd3; // ROL/ROR/SHL/SHR data_reg,CL
   DL = REG_CL;
   assert(AL == 0 || AL == 1 || AL == 4 || AL == 5);
   //  bl=op, al=op/reg field in mrm (will be 0,1,4,5)
-  return emit_ops_emit_bl(); // data_reg,cl
+  emit_ops_emit_bl(); // data_reg,cl
+  return;
 }
 
 static void emit_op_mrm() {
@@ -2017,7 +2135,8 @@ static void emit_op_mrm() {
   }
   if (is_8086 != 0xff) {
     // we're on a 8086, or we're generating 8086-compat code
-    return bl_op_reg_mrm();
+    bl_op_reg_mrm();
+    return;
   }
 
   PUSH(AX);
@@ -2026,13 +2145,15 @@ static void emit_op_mrm() {
   }
   if (AL != 0) {
     POP(AX);
-    return bl_op_reg_mrm();
+    bl_op_reg_mrm();
+    return;
   }
   AL = DH;
 zero_dest:
   if (BP == 0 && AL == ptr_reg) {
     POP(AX);
-    return bl_op_reg_mrm();
+    bl_op_reg_mrm();
+    return;
   }
   POP(BX);
   AL = 0x90 | AL; // XCHG AX,reg
@@ -2113,7 +2234,8 @@ static void emit_ops_jnz() {
     jnz_patch_enc[BX] = AX;
   }
   DX = ++DI;
-  return store_data_reg();
+  store_data_reg();
+  return;
 }
 
 // emit_ops::@store_data_reg
@@ -2138,6 +2260,7 @@ static void store_data_reg() {
     DX = DI - BX;
     *((uint8_t *)cpu_state.rbx - 1) = DL;
     DX = data_reg << 8;
+    STACK_CHECK(__func__);
     return;
   }
 
@@ -2147,7 +2270,7 @@ static void store_data_reg() {
     // reg op?
 
     dump_all_regs();
-    D("stack: %x %x %x\n", stack[0], stackp[1], stackp[2]);
+    D("stack: %lx %lx %lx\n", stack[0], stackp[1], stackp[2]);
 
     if (DH == 0x80) {
       // needed dx for mul or cx for shifts/rotates
@@ -2178,11 +2301,14 @@ static void store_data_reg() {
       goto got_op;
     }
     AL += 6;
-    if (!CBW(A)) {
+    dump_all_regs();
+    if (CBW(A) == 0) {
       assert(AH == 0);
-      D("ax=%x\n", AX);
-      return emit_ops_maybe_mul();
+      D("ax=%lx\n", AX);
+      emit_ops_maybe_mul();
+      return;
     }
+    dump_all_regs();
     assert(AH == 0xff);
     BL = OPCODE_XOR;
     if (++AX) {
@@ -2199,21 +2325,22 @@ static void store_data_reg() {
 got_op:
   AL = data_reg;
   if (DL == 0) {
-    DH &= 0b10000111; // mask off reg and mode
+    DH &= 0x87; // mask off reg and mode
     if (BL == OPCODE_SUB) {
-      DH |= 0b01000000;
+      DH |= 0x40; // indicate we're SUB-ing
     }
     last_op_flag = DH;
     encode_mrm();
     if (!cpu_state.c) {
-      return save_op_done();
+      save_op_done();
+      return;
     }
     if (AL != 0) {
       BP++; // phase change
     }
   }
   // emit_ops::@try_optimization
-  BL ^= 0b110; // 0x81,0x35<<3 (sub) => 0xf7,0x33 (neg)
+  BL ^= 0x06; // 0x81,0x35<<3 (sub) => 0xf7,0x33 (neg)
   PUSH(DX);
   DX += 2;
   cpu_state.c = DX < 5;
@@ -2221,7 +2348,8 @@ got_op:
 
   // not in -2..2
   if (!cpu_state.c) {
-    return emit_81_ops();
+    emit_81_ops();
+    return;
   }
 
   // in -2..2, we can optimize:
@@ -2238,27 +2366,31 @@ got_op:
   //  none of these optimizations impact the carry flag when they're
   //  executed
   if (!SIGNBIT(AX)) {
-    if (BL != 0b00110101) {
-      return emit_81_ops();
+    if (BL != 0x35) {
+      emit_81_ops();
+      return;
     } else if (++DX != 0) {
       --DX;
-      return emit_81_ops();
+      emit_81_ops();
+      return;
     }
     DH = AL;
     AL = 2; // F7,2<<3 => not
-    return emit_f7_op();
+    emit_f7_op();
+    return;
   }
   if (SIGNBIT(DX)) {
     DX = -DX;
-    BL ^= 0b00101000; // toggle add/sub
+    BL ^= 0x28; // toggle add/sub
   }
   // emit_ops::@emit_inc
-  AL = (BL == 0b101 ? 0x40 : 0x48) | AL; // add,sub=>inc,dec
-  emitb(AL);                             // inc/dec
+  AL = (BL == 5 ? 0x40 : 0x48) | AL; // add,sub=>inc,dec
+  emitb(AL);                         // inc/dec
   if (--DX != 0) {
     emitb(AL); // inc/dec
   }
-  return save_op_done();
+  save_op_done();
+  return;
 }
 // emit_ops::@@save_op_done
 static void save_op_done() {
@@ -2269,18 +2401,22 @@ static void save_op_done() {
 static void emit_f7_op() {
   BL = 0xf7;
   CH = BL; // last_op_flag
-  return encode_mrm();
+  encode_mrm();
+  return;
 }
 // emit an 81 series op, unless AL=0 (emit op in BL and store word)
 static void emit_81_ops() {
   // implied by the `or AL,AL` at entry (or clears c)
   cpu_state.c = 0;
   if (AL != 0) {
-    BL = (mrm_t){.mod = 0b11, .op = (BL >> 3), .reg = AL}.byte;
+    BL = (mrm_t){.mod = 3, // reg,reg
+                 .op_80 = (BL >> 3),
+                 .reg = AL}
+             .byte;
     AL = DL;
 
     // if imm16 == signextend(imm8), optimize into imm8
-    CBW(A);
+    (void)CBW(A);
     // AX ^= DX;
     cpu_state.ax ^= cpu_state.dx;
     AL = cpu_state.ax != 0 ? 0x81 : 0x83; // imm16 or imm8
@@ -2310,9 +2446,22 @@ static void emit_81_ops() {
   return;
 }
 
-int is_parity_even(uint64_t x) { return __builtin_parity(x) == 0; }
-
 // register picking {{{
+// TODO stop `mkhdr -local`-ing, and define the static funcs up the top of
+// the file
+static void pick_ptr_register(uint8_t *);
+static void mark_and_emit(uint8_t *p) {
+  AX = AL;
+  BX = AX;
+  SWAP(BH, reg_set_enc[BL]);
+  if (BH == 0) {
+    pick_ptr_register(p);
+    return;
+  }
+  // got reg al
+  *p = AL;
+  DI++;
+}
 static void pick_ptr_register(uint8_t *p) {
   AX = random() & 3;
   if (AL == 0) {
@@ -2320,34 +2469,27 @@ static void pick_ptr_register(uint8_t *p) {
   }
   AL ^= 4;
   // AL = 3, 5, 6, 7
-  return mark_and_emit(p);
-}
-static void mark_and_emit(uint8_t *p) {
-  AX = AL;
-  BX = AX;
-  SWAP(BH, reg_set_enc[BL]);
-  if (BH == 0) {
-    return pick_ptr_register(p);
-  }
-  // got reg al
-  *p = AL;
-  DI++;
+  mark_and_emit(p);
+  return;
 }
 static void ptr_and_r_sto() {
   pick_ptr_register(&ptr_reg);
   AX = random() & 7;
   if (AL == 0) {
     // data reg = immediate
-    return mark_and_emit(&data_reg);
+    mark_and_emit(&data_reg);
+    return;
   }
   AL = 0;
   // if (AL == last_op_flag) {
   if (last_op_flag == 0) {
     // if we made an op with an immediate load, use that reg
-    return mark_and_emit(&data_reg);
+    mark_and_emit(&data_reg);
+    return;
   }
   // otherwise grab a second ptr reg as the data_reg?
-  return pick_ptr_register(&data_reg);
+  pick_ptr_register(&data_reg);
+  return;
 }
 // }}}
 
@@ -2362,23 +2504,32 @@ static void encrypt_target() {
   if (AX == 0) {
     DI = (uintptr_t)target_start;
   }
+
+  // TODO should have decrypt_stage_pushes+decrypt_stage  in a struct.
+  // instead let's point beyond the end of decrypt_stage_pushes so the BX--
+  // gets the desired location. BX = (uintptr_t)&decrypt_stage;
   BX = (uintptr_t)&decrypt_stage_pushes[8]; // end
 
   PUSH(CX);
   PUSH(AX);
-  D("generated %d pushes\n", BX - DX);
+
+  // toggle pushes to pops
+  D("generated %ld pushes\n", BX - DX);
   while (BX != DX) {
     BX--;
+    D("bx=%p dx=%p dec=%p target=%p\n", (void *)BX, (void *)DX,
+      (void *)decrypt_stage, (void *)target_start);
     AL = *((uint8_t *)BX) ^ 1;
     assert(AL == 0x61 || (AL >= 0x50 && AL <= 0x57));
     if (AL != 0x61) {
       AL ^= 9; // POP reg
     }
-    D("copying push %x to %p as pop %x\n", *((uint8_t *)BX), DI, AL);
+    D("copying push %x to %p as pop %x\n", *((uint8_t *)BX), (void *)DI, AL);
     assert(AL == 0x61 || (AL >= 0x58 && AL <= 0x5f));
     emitb(AL);
     CX++;
   }
+
   POP(DX);
   POP(AX);
 
@@ -2413,12 +2564,14 @@ static void encrypt_target() {
   AX >>= 1;
   CX = AX;
   // rep movsw
-  D("moving %d words of payload from %p to %p\n", CX, SI, DI);
+  D("moving %ld words of payload from %p to %p\n", CX, (void *)SI,
+    (void *)DI);
   while (CX--) {
     // *((uint16_t*)(SI += 2)) = *((uint16_t*)(DI += 2));
     *((uint16_t *)(DI += 2)) = *((uint16_t *)(SI += 2));
   }
-  return exec_enc_stage();
+  exec_enc_stage();
+  return;
 }
 
 struct mut_output *mut_engine(struct mut_input *f_in,
@@ -2472,9 +2625,9 @@ struct mut_output *mut_engine(struct mut_input *f_in,
 }
 
 static void dump_all_regs() {
-  printf("ax=%08llx bx=%08llx cx=%08llx dx=%08llx\n", cpu_state.rax,
+  printf("ax=%08lx bx=%08lx cx=%08lx dx=%08lx\n", cpu_state.rax,
          cpu_state.rbx, cpu_state.rcx, cpu_state.rdx);
-  printf("sp=%08llx bp=%08llx si=%08llx di=%08llx\n", cpu_state.rsp,
+  printf("sp=%08lx bp=%08lx si=%08lx di=%08lx\n", cpu_state.rsp,
          cpu_state.rbp, cpu_state.rsi, cpu_state.rdi);
 }
 

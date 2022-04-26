@@ -1,5 +1,5 @@
 
-CFLAGS?=-g -DDEBUG
+CFLAGS?=-g -DDEBUG -Wall -pedantic-errors
 #LDFLAGS=-ldl
 
 all: demo
@@ -12,7 +12,8 @@ demo: mte64.o demo.o
 demo.o: mte64.o
 
 mte64.h:	mte64.c
-	makeheaders -v -local mte64.c
+	#makeheaders -v -local mte64.c
+	makeheaders -v mte64.c
 	touch mte64.h
 
 mte64.o:	mte64.c mte64.h
