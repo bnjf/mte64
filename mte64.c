@@ -58,10 +58,11 @@ struct mut_input {
   mut_routine_size_t routine_size;
 };
 struct mut_output {
-  uint8_t *code;               // ds:DX
-  unsigned int len;            // AX
-  uint8_t *routine_end_offset; // DI
-  uint8_t *loop_offset;        // SI
+  uint8_t *code;              // ds:DX
+  unsigned int len;           // CX
+  unsigned int decrypted_len; // AX
+  uint8_t *routine_end;       // DI
+  uint8_t *loop_start;        // SI
 };
 #endif
 // }}}
@@ -2639,8 +2640,7 @@ static void encrypt_target() {
   return;
 }
 
-struct mut_output *mut_engine(struct mut_input *f_in,
-                              struct mut_output *f_out) {
+mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
   // test
   // mrm_t m = (mrm_t){.mod = MRM_MODE_REGISTER, .reg1 = REG_CX, .reg =
   // REG_CX}; D("%hx %hx %hx %hx\n", m.mod, m.reg1, m.reg, m.byte);
@@ -2712,6 +2712,12 @@ struct mut_output *mut_engine(struct mut_input *f_in,
   DI -= DX;
   AX = get_arg_size();
 
+  f_out->code = (uint8_t *)DX;
+  f_out->len = CX;
+  f_out->decrypted_len = AX;
+  f_out->routine_end = (uint8_t *)DI;
+  f_out->loop_start = (uint8_t *)SI;
+
   assert(stackp == stack + STACK_SIZE - 1);
   return f_out;
 }
@@ -2764,3 +2770,4 @@ static void test() {
   dump_ops_table();
 }
 // }}}  zc:w
+// ^Z

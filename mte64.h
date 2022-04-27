@@ -2,7 +2,7 @@
 #undef INTERFACE
 typedef struct mut_output mut_output;
 typedef struct mut_input mut_input;
-struct mut_output *mut_engine(struct mut_input *f_in,struct mut_output *f_out);
+mut_output *mut_engine(mut_input *f_in,mut_output *f_out);
 uint32_t integer_inverse(uint32_t a);
 int is_parity_even(uint64_t x);
 #define LOCAL static
@@ -119,10 +119,11 @@ enum reg_set_t { REG_SET_BUSY, REG_SET_AVAILABLE = 0xff };
 typedef enum reg_set_t reg_set_t;
 #define LOCAL_INTERFACE 0
 struct mut_output {
-  uint8_t *code;               // ds:DX
-  unsigned int len;            // AX
-  uint8_t *routine_end_offset; // DI
-  uint8_t *loop_offset;        // SI
+  uint8_t *code;              // ds:DX
+  unsigned int len;           // CX
+  unsigned int decrypted_len; // AX
+  uint8_t *routine_end;       // DI
+  uint8_t *loop_start;        // SI
 };
 enum mut_flags_t {
   MUT_FLAGS_PRESERVE_AX = 0x001,
