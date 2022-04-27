@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +19,8 @@ int main(int argc, char *argv[]) {
     in.payload_offset = 0;
     in.flags = MUT_FLAGS_PRESERVE_AX | MUT_FLAGS_RUN_ON_DIFFERENT_CPU;
 
-    in.routine_size = 15;
+    in.routine_size = argc > 1 ? atoi(argv[1]) : MUT_ROUTINE_SIZE_BIG;
+    assert(((in.routine_size + 1) & in.routine_size) == 0);
 
     mut_engine(&in, &out);
 

@@ -19,8 +19,11 @@
 
 // public stuff {{{
 #if INTERFACE
+// 512 -> 0x200.  it's the size of the buffers for the routine staging.
 #define MAX_ADD 512
+// this is defined as "32" in the doc, but the obj actually has 25.
 #define MAX_ADD_LEN 25
+
 // static const int CODE_LEN = 2100; // NOTUSED
 
 // size of the work segment + MAX_ADD_LEN
@@ -1219,7 +1222,8 @@ static void exec_enc_stage() {
 }
 
 static void make_enc_and_dec() {
-  CX += MAX_ADD_LEN - 5; // MAX_ADD_LEN - JMP NEAR (was 3)
+  // MAX_ADD_LEN:
+  CX += MAX_ADD_LEN - 3; // MAX_ADD_LEN rounded
   CX = -CX;
   CL &= -2;
   if (CL == 0) {
@@ -1228,7 +1232,7 @@ static void make_enc_and_dec() {
   SWAP(AX, DI);
   arg_code_entry = AX;
   AX += CX;
-  AL &= 0xfe;
+  AL &= -2;
   if (AL == 0) {
     AX -= 2;
   }
@@ -1674,7 +1678,7 @@ static void single_ref() {
     DL = 0;
     DH = AL;
 
-    // generate ogenerate ops, then
+    // generate ops, then
     junk_len_mask >>= 1;
     g_code_no_mask();
     PUSH(DX);
@@ -1707,22 +1711,26 @@ static void single_ref() {
   // 0x40->0x47 are REX prefixes now.  we can either encode:
   //   0x48 0xFF (0xC0 | reg)
   //
-  // we're using a u64 index, so let's encode
-  //   ADD R
+  // or... we're using a u64 index, so let's encode the upper bits of the addr
+  // in there.  we can then explicitly test we we wrapped the u32 part with a
+  // TEST.
   AL |= 0x40;
+
   emitb(0x48); // rex
   emitb(0x83); // 80 series op
   emitb((mrm_t){.op_80.mod = MRM_MODE_REGISTER,
                 .op_80.op = OPCODE_80_ADD,
                 .op_80.reg = AL}
             .byte);
-  emitb(4);
+  emitb(4); // XXX we actually need to be on a u32 boundary
   emitb(0x85);
-  emitb((mrm_t){.mod = MRM_MODE_REGISTER, .reg1 = REG_DI, .reg = REG_DI}.byte);
+  emitb((mrm_t){.mod = MRM_MODE_REGISTER, .reg1 = AL, .reg = AL}.byte);
+
   // }}}
 emit_jnz:
   // emit the jnz to the start of the loop
-  AL = 0x75;
+  // AL = 0x75;
+  AL = 0x78; // js
   emitb(AL);
   POP(BX);          // patch
   POP(AX);          // cx=start of loop
@@ -2539,11 +2547,11 @@ static void encrypt_target() {
   // AX should point to the end of our decrypt routine
   // CX should have the size (including pushes)
 
-  // ax -1?!
+  // getting ax -1 .. something wrong with the phase changes?
   dump_all_regs();
-  assert((AX - (uintptr_t)&decrypt_stage) +
-             __builtin_popcount(arg_flags & 0xf) ==
-         CX);
+  assert(
+      ((AX - (uintptr_t)&decrypt_stage) + __builtin_popcount(arg_flags & 0xf) ==
+       CX));
   CX += DX;
   DX = DI;
   DI = AX;
@@ -2652,7 +2660,7 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
   BP = f_in->exec_offset;
   DI = f_in->entry_offset;
   SI = f_in->payload_offset;
-  BX = 15; // f_in->routine_size;
+  BX = 7; // f_in->routine_size;
   AX = f_in->flags;
 
   make_enc_and_dec();
