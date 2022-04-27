@@ -680,12 +680,19 @@ static void get_op_loc() {
   CX = AX << 1; // args to scan (rounded)
   DI = (uintptr_t)&ops_args[1];
 
-  dump_all_regs();
-  abort();
-  for (CX = AX << 1; CX > 0; CX--, DI++) {
+  for (CX = AX << 1; CX > 0;
+       // uint8_t rv = ((uint8_t *)(&ops_args))[(i & -2) << 1 | (i & 1)];
+       CX--, DI = (DI & -2) << 1 | (DI & 1)) {
+    assert(_get_op_arg(0x42 - CX) <= 0xf);
+
     if (_get_op_arg(BX) == AL) {
-      SI = (0x42 - CX) >> 1; // DI - &ops_args[1] >> 2 ;
+      abort();
+      SI = (0x42 - CX - 1) >> 1; // DI - &ops_args[1] >> 2 ;
       if (ops[SI] >= 3) {
+        dump_all_regs();
+        dump_ops_table();
+        D("found at %lx\n", SI);
+        assert(0);
         cpu_state.c = 0;
         // returns SI=op# DI=addr_of_arg+1 CX=0x42-op# BX=op_arg#
         AX = (0x42 - CX); // index into ops_args
@@ -695,6 +702,9 @@ static void get_op_loc() {
   }
   // couldn't find a reference
   cpu_state.c = 1;
+  dump_all_regs();
+  dump_ops_table();
+  // assert(0);
   return;
 }
 
@@ -1013,7 +1023,9 @@ static uint32_t emitd(uint32_t x) {
 // }}}
 
 static void emit_mov_data() {
-  AL = data_reg;
+  dump_all_regs();
+  // assert(SI == (uintptr_t)&ptr_reg);
+  AL = data_reg; // XXX [SI-1]
   // printf("emit_mov_data: AX=%x DX=%x\n", AX, DX);
   emit_mov();
   return;
@@ -1047,6 +1059,7 @@ static void emit_mov() {
     reg_set_dec[BL] = BH;
   }
 
+  dump_all_regs();
   if (DL == 0) {
     BL = 0x8b;
     cpu_state.c = 0;
@@ -1060,6 +1073,7 @@ static void emit_mov() {
     // ... and AL=BX?
     // ... and BX<=>AX
   }
+  dump_all_regs();
   assert(AL < 8);
   D("mov %s,%lx\n", reg_names[AL], DX);
   AL = 0xb8 | AL;
@@ -1585,6 +1599,9 @@ static void encode_mrm() {
   return;
 }
 static void encode_mrm_ptr() {
+
+  // bl=op, dh=mrm, al=reg
+
   DH = ptr_reg;
   // D("reg=%x op=%x val=%x (bp=%x)\n", DH, BL, DX, BP);
   cpu_state.c = 0;
@@ -1592,7 +1609,7 @@ static void encode_mrm_ptr() {
     bl_op_reg_mrm();
     return;
   } else if (BP != 0) {
-    // D("staging memory load\n");
+    D("staging memory load\n");
     DX = BP;
     BP = DI + 1;
     cpu_state.c = 1;
@@ -1604,16 +1621,14 @@ static void encode_mrm_ptr() {
   PUSH(BX);
   SWAP(AL, DH);
   assert(AL == ptr_reg);
+  assert(AL == REG_BX || AL == REG_BP || AL == REG_SI || AL == REG_DI);
 
-  // xlat the mrm byte!
   // AL = ((uint8_t[]) { 0x87, 0, 0x86, 0x84, 0x85 })[BX - 3 + AL];
   // mrm byte is a little more sane in 32/64 mode
-  dump_all_regs();
-  assert(AL == REG_BX || AL == REG_BP || AL == REG_SI || AL == REG_DI);
   AL |= 0x80; // reg+off32
   SWAP(AL, DH);
   SWAP(AX, BX);
-  CL = 0x2e; // cs:
+  CL = 0x36; // ss:
   // XXX skip the rest
 
   // @@no_override
@@ -1946,7 +1961,6 @@ static void emit_ops() {
       AH = ops[BX];
       if (SIGNBIT(AH)) {
         dump_ops_table();
-        abort();
         continue;
       }
     }
@@ -2098,8 +2112,9 @@ static void emit_ops_maybe_rol(int is_rotate) {
   }
 
   assert(DL > 0 && DL <= 0xf);
-  assert(DH == data_reg); // could be any reg
-  assert(AH == 0xff || AH == 0x0 || AH == 1);
+  dump_all_regs();
+  assert(DH == 0 || DH == data_reg);          // could be any reg
+  assert(AH == 0xff || AH == 0x0 || AH == 1); // old bp?
   if (DL != 1 && AH == is_8086) {
     // can encode imm8, if:
     //
@@ -2256,8 +2271,7 @@ static void store_data_reg() {
   PUSH(DX);
 
   assert(BL < 0x21);
-  emit_ops(); // walk left
-  abort();
+  emit_ops();      // walk left
   emit_mov_data(); // finalize
 
   POP(DX); // this is meant to have our register
@@ -2593,6 +2607,26 @@ struct mut_output *mut_engine(struct mut_input *f_in,
   // D("%x\n", (mrm_t){.op_f7.mod = MRM_MODE_INDEX_DISP32, .op_f7 =
   // OPCODE_F7_NEG}.byte); D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER, .op_f7
   // = OPCODE_F7_NEG, .reg = REG_CX} .byte);
+
+  memcpy(ops, (op_t[]){1, 6, 7, 0, 4, 8, 1, 0, 0, 0}, 10 * sizeof(ops[0]));
+  memcpy(ops_args,
+         (uint32_t[]){0, 0x302, 0x504, 0x74b0dc51, 0x706, 0x908, 0x3d1b58ba,
+                      0x2eb141f2, 0x79e2a9e3, 0x515f007d},
+         10 * sizeof(ops_args[0]));
+  op_idx = 1;
+  op_free_idx = 9;
+  op_next_idx = 10;
+  op_end_idx = 6;
+
+  dump_ops_table();
+
+  AX = 6;
+  get_op_loc();
+  assert(cpu_state.c == 0);
+  assert(BX == 51);
+
+  dump_all_regs();
+  exit(0);
 
   // in = f_in;
   // out = f_out;
