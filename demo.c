@@ -9,7 +9,7 @@ int main(int argc, char *argv[]) {
   mut_input in;
   mut_output out;
 
-  srandom(2);
+  srandom(1);
   for (int i = 0; i < 1; i++) {
     in.code = (uint8_t *)"\x90\x90\x90\xc3";
     in.len = 4; // XXX failing if we're not on a boundary

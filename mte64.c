@@ -1752,24 +1752,39 @@ emit_jnz:
 static void size_ok() {
   encode_retf();
   PUSH(CX);
+
   DX = (uintptr_t)&target_start;
   if (generating_enc()) {
-    D("generating enc, patching offsets (bx=%lx)\n", BX);
+    // if we're generating the encryption routine, patch the first memory
+    // access to the caller supplied code (originally ds:dx), and the second
+    // offset to target_start+arg_size.  this means the encryption routine will
+    // copy in the data from the caller, perform the crypt ops, then store into
+    // `target_start`.  e.g.
+    //
+    //   mov bx,-size
+    // l:mov ax,dword [ptr+caller_code+size]
+    //   xor ax,random
+    //   mov dword [ptr+target_stage+size],ax
+    //   add bx,4
+    //   jnz l
     patch_offsets();
     return;
   }
-  PUSH(BX);
 
-  BL = 7;
+  PUSH(BX); // save op_off_patch
+
+  // junk
+  BL = MUT_ROUTINE_SIZE_MEDIUM;
   DX = BP;
   g_code();
 
+  // emit pushes into decrypt_stage_pushes {{{
   PUSH(DI);
   DI = ((uintptr_t)&decrypt_stage) - 1; // decrypt_stage_pushes
   assert(DI == (uintptr_t)&decrypt_stage_pushes[7]);
   BX = 0;
   DX = DI;
-  CL = arg_flags;
+  CL = arg_flags; // grab the lower byte
   do {
     CL = shr8(CL);
     if (cpu_state.c && reg_set_dec[BL] == BH) {
@@ -1779,11 +1794,6 @@ static void size_ok() {
     BX++;
   } while (CL);
 
-  /*if (DI == ((uintptr_t)&decrypt_stage) - 1) {*/
-  /*  DI = (uintptr_t)&decrypt_stage;           */
-  /*} else {                                    */
-  /*  DI++;                                     */
-  /*}                                           */
   DI++;
 
   if (DI < DX) {
@@ -1792,8 +1802,9 @@ static void size_ok() {
   }
   // @@pushes_done
   POP(BP);
-  D("bp=%lx\n", BP);
+  // }}}
 
+  // adjust for user supplied offsets {{{
   CX = BP - DI;
   if (arg_code_entry != 0) {
     // 5 bytes for jump
@@ -1803,8 +1814,9 @@ static void size_ok() {
   AX = DX;
   DX += CX;
   AX += arg_start_off;
+  // }}}
 
-  POP(BX);
+  POP(BX); // retrieve op_off_patch
   if (arg_start_off == 0) {
     DX = AX;
   }
@@ -1814,7 +1826,14 @@ static void size_ok() {
 
 static void patch_offsets() {
   // printf("patch_offsets(): BX=%llx\n", cpu_state.rbx);
-  D("patching %p and %p\n", (void *)BX, (void *)op_off_patch);
+  D("arg_size_neg=-%lx\n", -arg_size_neg);
+  D("patching\n"
+    "\tencrypt_stage[%p]=-%lx and\n"
+    "\tencrypt_stage[%p]=target_start+%lx\n",
+    (void *)(BX - (uintptr_t)encrypt_stage), -(AX - arg_size_neg),
+    (void *)(op_off_patch - (uintptr_t)encrypt_stage),
+    (DX - arg_size_neg) - (uintptr_t)&target_start);
+  abort();
   AX = DX;
   patch();
   AX = DX;
@@ -1824,15 +1843,10 @@ static void patch_offsets() {
 }
 
 static void patch() {
-  // XXX i forgot about the optmization that's done when signed imm8 == imm16
+  // XXX i forgot about the optmization that's done when signed imm8 == imm16,
+  // but that's not for memory ops
   AX = AX - arg_size_neg;
   assert(BX != 0);
-  if (BX == 0) {
-    // in the original this would've just zapped the first two ops
-    D("got null patch point?! bx=%lx ax=%lx\n", BX, AX);
-    assert(0);
-    return;
-  }
   D("patching [%lx] with %lx\n", BX, AX);
   *((uint32_t *)BX) = AX;
 }
@@ -1869,23 +1883,21 @@ static void emit_ops() {
       _get_op_arg(BX + 1));
   }
 
-  // OP_MOV_MEM?
-  // DX = -1 & ~0xff; // 0xff00; // aux reg into ax
-  // DH = 0xff; DL = 0;
+  // ptr reg init
   DX = ~0xff;
   if (--AX == 0) {
     D("data reg op %s, returning: %lx\n", op_to_str[AX + 1], DX);
     return;
   }
 
-  // OP_POINTER?
+  // data load/store
   if (--AX == 0) {
     DH = ptr_reg;
     D("pointer op %s, returning: %lx\n", op_to_str[AX + 2], DX);
     return;
   }
 
-  // OP_REG_INIT
+  // reg, imm
   DX = ops_args[BX / 2];
   if (AX == -2) {
     D("register init op %s, returning: %lx\n", op_to_str[AX + 2], DX);
@@ -1897,7 +1909,6 @@ static void emit_ops() {
   PUSH(BX);
 
   // walk right
-  // D("at %x, heading to %x\n", BL, DH);
   BL = DH; // op_idx = upper(ops_args[i])
   emit_ops();
 
@@ -2651,7 +2662,8 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
   // out = f_out;
   stackp = stack + STACK_SIZE - 1;
 
-  PUSH((uintptr_t)f_in->code / 16); // let's pretend it's a segment
+  // PUSH((uintptr_t)f_in->code / 16); // let's pretend it's a segment
+  PUSH(0);
   PUSH((uintptr_t)f_in->code);
   PUSH((uintptr_t)f_in->exec_offset);
 
