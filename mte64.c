@@ -1127,7 +1127,7 @@ static void exec_enc_stage() {
   uintptr_t page = (uintptr_t)encrypt_stage / pagesize;
 
   if (mprotect((uintptr_t *)(page * pagesize), (MAX_ADD * 2),
-               PROT_READ | PROT_EXEC) == -1) {
+               PROT_READ | PROT_WRITE | PROT_EXEC) == -1) {
     fprintf(stderr, "mprotect() failed: %s\n", strerror(errno));
     abort();
   }
@@ -1703,8 +1703,11 @@ static void single_ref() {
     POP(AX);
     emit_mov();
     // }}}
-    if ((CH & 0x80) == 0) {
+    if (SIGNBIT(CH)) {
       // we did sub/add arith on the ptr reg, and we adjusted it by 2
+      //
+      // this needs to be changed to 4
+      assert(0);
       goto emit_jnz;
     }
   }
@@ -1712,14 +1715,19 @@ static void single_ref() {
   // emit inc {{{
   // 0x40->0x47 are REX prefixes now.  we can either encode:
   //   0x48 0xFF (0xC0 | reg)
-  //   0x48 0xFF (0xC0 | reg)
-  // or just go straight for an add +2?
+  //
+  // we're using a u64 index, so let's encode
+  //   ADD R
   AL |= 0x40;
-  for (int i = 4; i; i--) {
-    emitb(0x48);
-    emitb(0xff);
-    emitb(0xc0 | AL);
-  }
+  emitb(0x48); // rex
+  emitb(0x83); // 80 series op
+  emitb((mrm_t){.op_80.mod = MRM_MODE_REGISTER,
+                .op_80.op = OPCODE_80_ADD,
+                .op_80.reg = AL}
+            .byte);
+  emitb(4);
+  emitb(0x85);
+  emitb((mrm_t){.mod = MRM_MODE_REGISTER, .reg1 = REG_DI, .reg = REG_DI}.byte);
   // }}}
 emit_jnz:
   // emit the jnz to the start of the loop
@@ -2704,7 +2712,7 @@ struct mut_output *mut_engine(struct mut_input *f_in,
   DI -= DX;
   AX = get_arg_size();
 
-  assert(stackp == &stack[0]);
+  assert(stackp == stack + STACK_SIZE - 1);
   return f_out;
 }
 
