@@ -977,16 +977,6 @@ static int generating_dec() {
   return rv;
 }
 
-// emits an op and a REG,REG MRM
-// if the op is 0xF7, src is:
-//   0,1  TEST r/m,imm8/16
-//   2    NOT  r/m
-//   3    NEG  r/m
-//   4    MUL  r/m
-//   5    IMUL r/m
-//   6    DIV  r/m (not generated)
-//   7    IDIV r/m (not generated)
-
 // emits for byte/word/dword {{{
 static uint8_t emitb(uint8_t x) {
   char where[32] = {"*DI"};
@@ -1258,7 +1248,7 @@ static void make_enc_and_dec() {
   DI = (uintptr_t)&reg_set_dec;
 
   // XXX moved this out of restart
-  srandom(1);
+  // srandom();
 
   restart();
   return;
@@ -1826,6 +1816,7 @@ static void patch_offsets() {
 }
 
 static void patch() {
+  // XXX i forgot about the optmization that's done when signed imm8 == imm16
   AX = AX - arg_size_neg;
   assert(BX != 0);
   if (BX == 0) {
@@ -1834,6 +1825,7 @@ static void patch() {
     assert(0);
     return;
   }
+  D("patching [%lx] with %lx\n", BX, AX);
   *((uint32_t *)BX) = AX;
 }
 
@@ -2469,15 +2461,15 @@ static void emit_81_ops() {
     cpu_state.ax ^= cpu_state.dx;
     AL = cpu_state.ax != 0 ? 0x81 : 0x83; // imm16 or imm8
     if (AL == 0x83) {
+      // XXX
       cpu_state.c = 1;
     }
     emitb(AL);
   }
 
-  dump_all_regs();
   SWAP(AX, BX);
   emitb(AL);
-  SWAP(AX, DX); // XXX trashing DX here
+  SWAP(AX, DX);
 
   // if AL was 0 it's a 3-byte (or 2-byte if C was set)
   // originally written like this
@@ -2546,6 +2538,9 @@ static void encrypt_target() {
 
   // AX should point to the end of our decrypt routine
   // CX should have the size (including pushes)
+
+  // ax -1?!
+  dump_all_regs();
   assert((AX - (uintptr_t)&decrypt_stage) +
              __builtin_popcount(arg_flags & 0xf) ==
          CX);
@@ -2641,29 +2636,9 @@ static void encrypt_target() {
 }
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
-  // test
-  // mrm_t m = (mrm_t){.mod = MRM_MODE_REGISTER, .reg1 = REG_CX, .reg =
-  // REG_CX}; D("%hx %hx %hx %hx\n", m.mod, m.reg1, m.reg, m.byte);
-  // D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER}.byte);
-  // D("%x\n", (mrm_t){.op_f7.mod = MRM_MODE_INDEX_DISP32, .op_f7 =
-  // OPCODE_F7_NEG}.byte); D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER, .op_f7
-  // = OPCODE_F7_NEG, .reg = REG_CX} .byte);
-
-  memcpy(ops, (op_t[]){1, 6, 7, 0, 4, 8, 1, 0, 0, 0}, 10 * sizeof(ops[0]));
-  // check enum vs raw
-  assert(memcmp((op_t[]){1, OP_MUL, OP_ROL, 0, OP_ADD, OP_ROR, 1, 0, 0, 0, 0},
-                ops, 10 * sizeof(ops[0])) == 0);
-  memcpy(ops_args,
-         (uint32_t[]){0, 0x302, 0x504, 0x74b0dc51, 0x706, 0x908, 0x3d1b58ba,
-                      0x2eb141f2, 0x79e2a9e3, 0x515f007d},
-         10 * sizeof(ops_args[0]));
-  op_idx = 1;
-  op_free_idx = 9;
-  op_next_idx = 10;
-  op_end_idx = 6;
-
+#if DEBUG
   test();
-
+#endif
   // in = f_in;
   // out = f_out;
   stackp = stack + STACK_SIZE - 1;
@@ -2734,6 +2709,27 @@ static void dump_all_regs() {
 // {{{ tests
 static void test() {
 
+  // test
+  // mrm_t m = (mrm_t){.mod = MRM_MODE_REGISTER, .reg1 = REG_CX, .reg =
+  // REG_CX}; D("%hx %hx %hx %hx\n", m.mod, m.reg1, m.reg, m.byte);
+  // D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER}.byte);
+  // D("%x\n", (mrm_t){.op_f7.mod = MRM_MODE_INDEX_DISP32, .op_f7 =
+  // OPCODE_F7_NEG}.byte); D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER, .op_f7
+  // = OPCODE_F7_NEG, .reg = REG_CX} .byte);
+
+  memcpy(ops, (op_t[]){1, 6, 7, 0, 4, 8, 1, 0, 0, 0}, 10 * sizeof(ops[0]));
+  // check enum vs raw
+  assert(memcmp((op_t[]){1, OP_MUL, OP_ROL, 0, OP_ADD, OP_ROR, 1, 0, 0, 0, 0},
+                ops, 10 * sizeof(ops[0])) == 0);
+  memcpy(ops_args,
+         (uint32_t[]){0, 0x302, 0x504, 0x74b0dc51, 0x706, 0x908, 0x3d1b58ba,
+                      0x2eb141f2, 0x79e2a9e3, 0x515f007d},
+         10 * sizeof(ops_args[0]));
+  op_idx = 1;
+  op_free_idx = 9;
+  op_next_idx = 10;
+  op_end_idx = 6;
+
   // 10 doesn't exist
   AX = 10 * 2;
   get_op_loc();
@@ -2768,6 +2764,29 @@ static void test() {
   dump_ops_table();
   invert_ops_loop();
   dump_ops_table();
+
+  op_idx = 1;
+  op_end_idx = 2;
+  op_next_idx = 8;
+  op_free_idx = 7;
+  memcpy(ops,
+         (op_t[]){OP_START_OR_END, 133, OP_START_OR_END, 138, OP_MUL, OP_DATA,
+                  OP_DATA, OP_DATA, OP_DATA, OP_START_OR_END, OP_DATA,
+                  OP_POINTER, OP_POINTER, OP_DATA, OP_DATA, OP_POINTER,
+                  OP_DATA},
+         0x21);
+  memcpy(ops_args,
+         (uint32_t[]){0, 155321090, 8936987, 387319044, 841090822, 1960709859,
+                      771151433, 1244316437, 1633108117, 2007905771, 822890675,
+                      791698927, 498777856, 524872353, 1572276965, 1703964683,
+                      0},
+         0x21 * 4);
+  dump_ops_table();
+  dump_ops_tree(0, 1);
+  dump_ops_tree(op_idx, 1);
+  invert_ops();
+  dump_ops_tree(op_end_idx, 1);
+  dump_ops_tree(op_idx, 1);
 }
 // }}}  zc:w
 // ^Z
