@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "mte64.h"
 
@@ -32,6 +33,11 @@ int main(int argc, char *argv[]) {
            "loop_start: %p\n",
            out.code, out.len, out.decrypted_len, out.routine_end,
            out.loop_start);
+    char fn[] = "payload.XXXXXXXX";
+    int fd = mkstemp(fn);
+    if (fd < 0) { abort(); }
+    if (write(fd, out.code, out.len) < out.len) { abort(); }
+    close(fd);
   }
 
   return 0;

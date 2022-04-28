@@ -98,7 +98,7 @@ enum op_t {
   OP_DATA,         // mov ptr_reg,data_reg || mov data_reg,ptr_reg
   OP_START_OR_END, // mov ptr,imm || mov data,ptr
   OP_POINTER,      // mov [ptr],data_reg || mov data_reg,[ptr]
-  // invertible ops
+                   // invertible ops
   OP_SUB,
   OP_ADD,
   OP_XOR,
