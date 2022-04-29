@@ -4,7 +4,6 @@ typedef struct mut_output mut_output;
 typedef struct mut_input mut_input;
 mut_output *mut_engine(mut_input *f_in,mut_output *f_out);
 uint32_t integer_inverse(uint32_t a);
-int is_parity_even(uint64_t x);
 #define LOCAL static
 typedef union mrm_t mrm_t;
 enum reg16_t {
