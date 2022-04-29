@@ -1,6 +1,6 @@
 
-CFLAGS?=-g -DDEBUG -Wall -pedantic-errors
-#LDFLAGS=-ldl
+CFLAGS?=-g -pg -DDEBUG -Wall -pedantic-errors
+LDFLAGS?=-pg
 
 all: demo
 

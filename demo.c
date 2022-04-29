@@ -6,12 +6,13 @@
 
 #include "mte64.h"
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
   mut_input in;
   mut_output out;
 
   srandom(1);
-  for (int i = 0; i < 1; i++) {
+  for (int i = 0; i < 100; i++) {
     in.code = (uint8_t *)"\x90\x90\x90\xc3";
     in.len = 4; // XXX failing if we're not on a boundary
 
@@ -33,11 +34,14 @@ int main(int argc, char *argv[]) {
            "loop_start: %p\n",
            out.code, out.len, out.decrypted_len, out.routine_end,
            out.loop_start);
+
+#if DUMP_PAYLOAD
     char fn[] = "payload.XXXXXXXX";
     int fd = mkstemp(fn);
     if (fd < 0) { abort(); }
     if (write(fd, out.code, out.len) < out.len) { abort(); }
     close(fd);
+#endif
   }
 
   return 0;
