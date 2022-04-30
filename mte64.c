@@ -273,8 +273,9 @@ LOCAL uint8_t ptr_reg;
 LOCAL uint8_t data_reg;
 LOCAL uint8_t last_op; // 0,0x8a,0xf7,0xc1,-1
 LOCAL uint8_t last_op_flag;
-LOCAL uint32_t patch_dummy; // this is only u8 in the original, and it
-// overlaps onto the push reserve space
+// this is only u8 in the original, and it overlaps onto the push reserve
+// space
+LOCAL uint32_t patch_dummy;
 LOCAL struct {
   uint8_t decrypt_stage_pushes[8];
   uint8_t decrypt_stage[MAX_ADD];
@@ -322,7 +323,7 @@ static void test();
 // }}}
 
 // stuff to help while we keep global state
-#define STACK_SIZE 256
+#define STACK_SIZE 1024
 LOCAL uint64_t stack[STACK_SIZE], *stackp = stack + STACK_SIZE - 1;
 #define STACK_INFO_INIT(x) int x##stackp0 = stackp - stack;
 #define STACK_INFO(x)                                                        \
@@ -429,8 +430,6 @@ LOCAL struct { // global registers {{{
 // }}}
 
 // upper/lower stuff
-//#define LOWER(x) ((x)&0xff)
-//#define UPPER(x) LOWER(((x) >> 8))
 #define GETLO(reg) ((reg)&0xff)
 #define GETHI(reg) (GETLO(((reg) >> 8)))
 #define SETLO(reg, val) (reg = GETHI(reg) | ((val)&0xff), val)
@@ -1375,9 +1374,14 @@ static void restart()
 
   DI = (uintptr_t)&work.decrypt_stage;
   BL = MUT_ROUTINE_SIZE_MEDIUM; // 7
+  BL = MUT_ROUTINE_SIZE_TINY;
   make();
 
-  assert((*(uint8_t *)DI) == 0xc3);
+  D("di=%p enc=%p dec=%p\n", (void *)DI, (void *)&work.encrypt_stage,
+    (void *)&work.decrypt_stage);
+  dump_all_regs();
+  assert(*(uint8_t *)DI == 0xc3 || DI == (uintptr_t)&work.decrypt_stage - 1 ||
+         DI == (uintptr_t)&work.decrypt_stage);
   DI -= 1;
   if (DI != (uintptr_t)&work.decrypt_stage) {
     // patch the values into the pointer and key init {{{
@@ -1387,7 +1391,7 @@ static void restart()
     PUSH(DI);
 
     PUSH(BP);
-    AX = 1;
+    AX = 1; // identity
     exec_enc_stage();
     POP(DI);
     SWAP(AX, BP);
@@ -1553,6 +1557,7 @@ static void g_code_from_ops()
   SI = DI;
   // picks ptr and data reg, sets BH=FF BL=AL=data_reg
   ptr_and_r_sto();
+  assert(BL == data_reg && AL == data_reg && BH == 0xff);
   POP(DX);
   POP(BX);
 
@@ -1590,23 +1595,19 @@ static void g_code_from_ops()
         PUSH(AX); // offset to patch
         AL = last_op_flag;
         D("al=%x bp=%lx\n", AL, BP);
-        // if ((AL & 0b10110111) == 0b10000111 && BP == arg_start_off) {
         if ((AL &= 0xb7) == 0x87 && BP == arg_start_off) {
           // flip direction
           D("flipping %x to %x\n", *((uint8_t *)DI - 6) ^ 2,
             *((uint8_t *)DI - 6));
           *((uint8_t *)DI - 6) ^= 2; // 4 in the original, but we have off32
-          assert(0);
           last_op_flag <<= 1;
           if (last_op_flag & 0x80) {
             // add -> sub/neg
             BL = 0xf7;
             AL = 3; // OPCODE_F7_NEG
-            STACK_CHECK(__func__);
             emit_eol_bl();
             return;
           }
-          STACK_CHECK(__func__);
           single_ref();
           return;
         }
@@ -1667,24 +1668,17 @@ static void g_code_from_ops()
 
     dump_ops_table();
     dump_all_regs();
+    D("last_op=%x last_op_flag=%x\n", last_op, last_op_flag);
     assert(AX == op_idx);
     assert(BH == 0xff &&
            // bl could also be the opcode
            (BL == op_idx || BL == 0xf7 || BL == 0x81 || BL == 0xc1 ||
-            BL == 0xd3 || BL == 0 || BL == 0x2b));
+            BL == 0xd3 || BL < 8 || BL == 0xd1 || BL == 0x2b));
     assert(
         // pointer init
         (SIGNBIT(DH) && DX == arg_size_neg) ||
         // imm init
-        DX == ops_args[ops_args[op_idx] & 0xff] ||
-        // mul
-        (BL == 0xf7 && DX == 0x0) ||
-        // 81 ops
-        (BL == 0x81 ||
-         /* rotates/shifts */
-         BL == 0xc1 || BL == 0xd3) ||
-        // key load
-        (BX == ~0xff));
+        DX == ops_args[ops_args[op_idx] & 0xff] || (!SIGNBIT(DH)));
     return;
     // }}}
   }
@@ -2030,7 +2024,13 @@ static void emit_ops()
   BL = DH; // op_idx = upper(ops_args[i])
   emit_ops();
   dump_all_regs();
-  assert(DX == ~0xff || ((!(BX & 1)) && ops_args[BX / 2] == DX) || DL == 0);
+  // if (BX < 0x42) D("%lx\n", ops_args[BX / 2] & 0xffff);
+  assert(DX == ~0xff ||              // mov_key
+         (!(BX & 1) && BX < 0x42 &&  // valid op index?
+          (ops_args[BX / 2] == DX || // mov_reg
+           (ops[BX / 2] >= 3 &&
+            (ops_args[BX / 2] & 0xffff) == (CX & 0xffff)))) || // ops
+         DL == 0);
 
   POP(BX);
   POP(CX);
