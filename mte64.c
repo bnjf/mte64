@@ -275,10 +275,12 @@ LOCAL uint8_t last_op; // 0,0x8a,0xf7,0xc1,-1
 LOCAL uint8_t last_op_flag;
 LOCAL uint32_t patch_dummy; // this is only u8 in the original, and it
 // overlaps onto the push reserve space
-LOCAL uint8_t decrypt_stage_pushes[8];
-LOCAL uint8_t decrypt_stage[MAX_ADD];
-LOCAL uint8_t encrypt_stage[MAX_ADD];
-LOCAL uint8_t target_start[100000]; // XXX this should be caller supplied
+LOCAL struct {
+  uint8_t decrypt_stage_pushes[8];
+  uint8_t decrypt_stage[MAX_ADD];
+  uint8_t encrypt_stage[MAX_ADD];
+  uint8_t target_start[100000]; // XXX this should be caller supplied
+} work;
 // }}}
 
 // local prototypes for static funcs {{{
@@ -1005,22 +1007,22 @@ static uint32_t get_op_args(uint8_t i)
 
 static int generating_enc()
 {
-  int rv = (DI >= (uintptr_t)encrypt_stage &&
-            DI < ((uintptr_t)encrypt_stage) + MAX_ADD);
-  assert(rv != ((DI >= (uintptr_t)decrypt_stage_pushes &&
-                 DI < ((uintptr_t)decrypt_stage_pushes) + 8) ||
-                (DI >= (uintptr_t)decrypt_stage &&
-                 DI < ((uintptr_t)decrypt_stage) + MAX_ADD)));
+  int rv = (DI >= (uintptr_t)work.encrypt_stage &&
+            DI < ((uintptr_t)work.encrypt_stage) + MAX_ADD);
+  assert(rv != ((DI >= (uintptr_t)work.decrypt_stage_pushes &&
+                 DI < ((uintptr_t)work.decrypt_stage_pushes) + 8) ||
+                (DI >= (uintptr_t)work.decrypt_stage &&
+                 DI < ((uintptr_t)work.decrypt_stage) + MAX_ADD)));
   return rv;
 }
 static int generating_dec()
 {
-  int rv = (DI >= (uintptr_t)decrypt_stage_pushes &&
-            DI < ((uintptr_t)decrypt_stage_pushes) + 8) ||
-           (DI >= (uintptr_t)decrypt_stage &&
-            DI < ((uintptr_t)decrypt_stage) + MAX_ADD);
-  assert(rv != ((DI >= (uintptr_t)encrypt_stage &&
-                 DI < ((uintptr_t)encrypt_stage) + MAX_ADD)));
+  int rv = (DI >= (uintptr_t)work.decrypt_stage_pushes &&
+            DI < ((uintptr_t)work.decrypt_stage_pushes) + 8) ||
+           (DI >= (uintptr_t)work.decrypt_stage &&
+            DI < ((uintptr_t)work.decrypt_stage) + MAX_ADD);
+  assert(rv != ((DI >= (uintptr_t)work.encrypt_stage &&
+                 DI < ((uintptr_t)work.encrypt_stage) + MAX_ADD)));
   return rv;
 }
 
@@ -1029,17 +1031,17 @@ static inline uint8_t emitb(uint8_t x)
 {
   char where[32] = {"*DI"};
 
-  if (DI >= (uintptr_t)encrypt_stage &&
-      DI < (uintptr_t)encrypt_stage + MAX_ADD) {
-    sprintf(where, "enc[%lu]", DI - (uintptr_t)encrypt_stage);
+  if (DI >= (uintptr_t)work.encrypt_stage &&
+      DI < (uintptr_t)work.encrypt_stage + MAX_ADD) {
+    sprintf(where, "enc[%lu]", DI - (uintptr_t)work.encrypt_stage);
   }
-  else if (DI >= (uintptr_t)decrypt_stage &&
-           DI < (uintptr_t)decrypt_stage + MAX_ADD) {
-    sprintf(where, "dec[%lu]", DI - (uintptr_t)decrypt_stage);
+  else if (DI >= (uintptr_t)work.decrypt_stage &&
+           DI < (uintptr_t)work.decrypt_stage + MAX_ADD) {
+    sprintf(where, "dec[%lu]", DI - (uintptr_t)work.decrypt_stage);
   }
-  else if (DI >= (uintptr_t)target_start &&
-           DI < (uintptr_t)target_start + MAX_ADD) {
-    sprintf(where, "target[%lu]", DI - (uintptr_t)target_start);
+  else if (DI >= (uintptr_t)work.target_start &&
+           DI < (uintptr_t)work.target_start + MAX_ADD) {
+    sprintf(where, "target[%lu]", DI - (uintptr_t)work.target_start);
   }
   D("%s = %x\n", where, x);
   *((uint8_t *)cpu_state.rdi) = x;
@@ -1176,6 +1178,7 @@ static void emit_mov()
     emitb(DL);
     emitd(AX);
     // if it's the pointer, encode the upper part of the addr
+    // XXX fails sometimes
     emitd((DI >> 32) - 1);
   }
   POP(AX);
@@ -1206,13 +1209,16 @@ static void exec_enc_stage()
 
   // TODO config trap handler
 
-  BX = (uintptr_t)&encrypt_stage;
-  int pagesize = sysconf(_SC_PAGE_SIZE);
-  assert(pagesize != -1);
-  assert(pagesize > (MAX_ADD * 2));
-  uintptr_t page = (uintptr_t)encrypt_stage / pagesize;
+  BX = (uintptr_t)&work.encrypt_stage;
 
-  if (mprotect((uintptr_t *)(page * pagesize), (MAX_ADD * 2),
+  int pagesize = sysconf(_SC_PAGE_SIZE);
+  assert(MAX_ADD < pagesize);
+  int pagemask = ~(pagesize - 1);
+  void *es_page = (void *)((uintptr_t)&work.encrypt_stage & pagemask);
+  uintptr_t pg_lo = (uintptr_t)&work.encrypt_stage & pagemask;
+  uintptr_t pg_hi = ((uintptr_t)&work.encrypt_stage + MAX_ADD) & pagemask;
+
+  if (mprotect(es_page, pagesize + (pg_hi - pg_lo),
                PROT_READ | PROT_WRITE | PROT_EXEC) == -1) {
     fprintf(stderr, "mprotect() failed: %s\n", strerror(errno));
     abort();
@@ -1237,20 +1243,20 @@ static void exec_enc_stage()
   asm("push %%rbp\n\t"
       "movq %0,%%rax\n\t"
       "movq %1,%%rbp\n\t"
-      "call encrypt_stage\n\t"
-      "movq %%rbp,%1\n\t"
-      "movq %%rax,%0\n\t"
+      "call %4\n\t"
+      "movq %%rbp,%3\n\t"
+      "movq %%rax,%2\n\t"
       "pop %%rbp"
       : "+%rax"(AX), "+r"(BP)                                // out
-      : "%rax"(AX), "r"(BP)                                  // in
+      : "%rax"(AX), "r"(BP), "r"(&work.encrypt_stage)        // in
       : "%rax", "%rcx", "%rdx", "%rbx", "%rsi", "%rdi", "cc" // clobbers
   );
   dump_all_regs();
   D("<<< encrypt_stage returned\n");
 
   // reset perms
-  if (mprotect((uintptr_t *)(page * pagesize), MAX_ADD * 2,
-               PROT_READ | PROT_WRITE) == -1) {
+  if (mprotect(es_page, pagesize + (pg_hi - pg_lo), PROT_READ | PROT_WRITE) ==
+      -1) {
     fprintf(stderr, "mprotect() failed: %s\n", strerror(errno));
     abort();
   }
@@ -1367,16 +1373,16 @@ static void restart()
     emitb(AL);
   }
 
-  DI = (uintptr_t)&decrypt_stage;
+  DI = (uintptr_t)&work.decrypt_stage;
   BL = MUT_ROUTINE_SIZE_MEDIUM; // 7
   make();
 
   assert((*(uint8_t *)DI) == 0xc3);
   DI -= 1;
-  if (DI != (uintptr_t)&decrypt_stage) {
+  if (DI != (uintptr_t)&work.decrypt_stage) {
     // patch the values into the pointer and key init {{{
     D("decrypt_stage len currently %p\n",
-      (void *)(DI - (uintptr_t)&decrypt_stage));
+      (void *)(DI - (uintptr_t)&work.decrypt_stage));
     PUSH(DX);
     PUSH(DI);
 
@@ -1430,7 +1436,7 @@ static void make()
   arg_flags = MUT_FLAGS_CS_IS_NOT_SS | (arg_flags & 0xff);
 
   DX = arg_size_neg;
-  DI = (uintptr_t)&encrypt_stage;
+  DI = (uintptr_t)&work.encrypt_stage;
 
   PUSH(BP);
   g_code();
@@ -1619,9 +1625,10 @@ static void g_code_from_ops()
       }
       else {
         // null?
-        if (CX == (uintptr_t)&decrypt_stage[5]) {
+        if (CX == (uintptr_t)&work.decrypt_stage[5]) {
           CX -= 5;
           DI -= 5;
+          assert(reg_set_dec[ptr_reg] == REG_SET_BUSY);
           reg_set_dec[ptr_reg]--;
           BX = (uintptr_t)&patch_dummy;
           STACK_INFO(__func__);
@@ -1866,7 +1873,7 @@ static void size_ok()
   encode_retf();
   PUSH(CX);
 
-  DX = (uintptr_t)&target_start;
+  DX = (uintptr_t)&work.target_start;
   if (generating_enc()) {
     // if we're generating the encryption routine, patch the first memory
     // access to the caller supplied code (originally ds:dx), and the second
@@ -1893,8 +1900,8 @@ static void size_ok()
 
   // emit pushes into decrypt_stage_pushes {{{
   PUSH(DI);
-  DI = ((uintptr_t)&decrypt_stage) - 1; // decrypt_stage_pushes
-  assert(DI == (uintptr_t)&decrypt_stage_pushes[7]);
+  DI = ((uintptr_t)&work.decrypt_stage) - 1; // decrypt_stage_pushes
+  assert(DI == (uintptr_t)&work.decrypt_stage_pushes[7]);
   BX = 0;
   DX = DI;
   CL = arg_flags; // grab the lower byte
@@ -1921,7 +1928,7 @@ static void size_ok()
   CX = BP - DI;
   if (arg_code_entry != 0) {
     // 5 bytes for jump
-    CX += (uintptr_t)&decrypt_stage + 5 - DI;
+    CX += (uintptr_t)&work.decrypt_stage + 5 - DI;
   }
   DX = arg_exec_off;
   AX = DX;
@@ -1941,9 +1948,9 @@ static void patch_offsets()
   D("patching\n"
     "\tencrypt_stage[%p]=-%lx and\n"
     "\tencrypt_stage[%p]=target_start+%lx\n",
-    (void *)(BX - (uintptr_t)encrypt_stage), -(AX - arg_size_neg),
-    (void *)(op_off_patch - (uintptr_t)encrypt_stage),
-    (DX - arg_size_neg) - (uintptr_t)&target_start);
+    (void *)(BX - (uintptr_t)&work.encrypt_stage), -(AX - arg_size_neg),
+    (void *)(op_off_patch - (uintptr_t)&work.encrypt_stage),
+    (DX - arg_size_neg) - (uintptr_t)&work.target_start);
   AX = DX;
   patch();
   AX = DX;
@@ -2665,19 +2672,21 @@ static void encrypt_target()
 
   // getting ax -1 .. something wrong with the phase changes?
   dump_all_regs();
-  assert(((AX - (uintptr_t)&decrypt_stage) +
+  assert(((AX - (uintptr_t)&work.decrypt_stage) +
               __builtin_popcount(arg_flags & 0xf) ==
           CX));
   CX += DX;
   DX = DI;
   DI = AX;
   AX = arg_code_entry;
-  if (AX == 0) { DI = (uintptr_t)target_start; }
+  if (AX == 0) { DI = (uintptr_t)&work.target_start; }
 
   // TODO should have decrypt_stage_pushes+decrypt_stage in a struct.
   // instead let's point beyond the end of decrypt_stage_pushes so the BX--
-  // gets the desired location. BX = (uintptr_t)&decrypt_stage;
-  BX = (uintptr_t)&decrypt_stage_pushes[8]; // end
+  // gets the desired location.
+  BX = (uintptr_t)&work.decrypt_stage; // end
+  // check alignment
+  assert(BX == (uintptr_t)&work.decrypt_stage_pushes[8]);
 
   PUSH(CX);
   PUSH(AX);
@@ -2694,7 +2703,7 @@ static void encrypt_target()
   while (BX != DX) {
     BX--;
     D("bx=%p dx=%p dec=%p target=%p\n", (void *)BX, (void *)DX,
-      (void *)decrypt_stage, (void *)target_start);
+      (void *)work.decrypt_stage, (void *)work.target_start);
 
     AL = *((uint8_t *)BX) ^ 1;
     assert(AL == 0x61 || (AL >= 0x50 && AL <= 0x57));
@@ -2718,7 +2727,7 @@ static void encrypt_target()
     BX = DI; // patch point
     SWAP(AX, DX);
     emitd(AX);
-    DI = (uintptr_t)target_start;
+    DI = (uintptr_t)&work.target_start;
   }
   // bx is either &patch_dummy, or the jmp offset
 
@@ -2727,7 +2736,7 @@ static void encrypt_target()
     dump_all_regs();
     CX = -CX & 0xf;
     dump_all_regs();
-    D("currently at %lx\n", DI - (uintptr_t)&target_start);
+    D("currently at %lx\n", DI - (uintptr_t)&work.target_start);
     // TODO
     // assert((CX + __builtin_popcount(arg_flags & 0xf) * 2) % 16 == 0);
     AL = 0x90;
@@ -2737,7 +2746,7 @@ static void encrypt_target()
   }
 
   // patch the (optional) jump dest
-  AX = DI - (uintptr_t)&target_start;
+  AX = DI - (uintptr_t)&work.target_start;
   *((uint32_t *)BX) += AX;
   AL &= -2;
   arg_size_neg += AX;
@@ -2797,7 +2806,7 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out)
 
   POP(CX);
   POP(SI);
-  DI = ((uintptr_t)&target_start) - CX;
+  DI = ((uintptr_t)&work.target_start) - CX;
   PUSH(DI);
   PUSH(DX);
 

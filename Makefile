@@ -1,5 +1,5 @@
 
-CFLAGS?=-g -pg -DDEBUG -Wall -pedantic-errors -O
+CFLAGS?=-g -pg -DDEBUG -Wall -pedantic-errors -O -Wno-unused-function
 LDFLAGS?=-pg
 
 all: demo
