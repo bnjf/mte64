@@ -1,23 +1,18 @@
 
-CFLAGS?=-g -pg -DDEBUG -Wall -pedantic-errors -O -Wno-unused-function
-LDFLAGS?=-pg
+CFLAGS?=-g -DDEBUG -Wall -pedantic-errors -Wno-unused-function \
+	-O9 -march=native
+LDFLAGS?=
 
-all: demo
+all: tags headers demo
 
 clean:
 	rm -f demo.o mte64.o mte64.h
 
-demo: mte64.o demo.o
+demo: mte64.o demo.o op_tree.o rnd.o
 
-demo.o: mte64.o
+headers:
+	makeheaders -v *.[ch]
 
-mte64.h:	mte64.c
-	#makeheaders -v -local mte64.c
-	makeheaders -v mte64.c
-	touch mte64.h
-
-mte64.o:	mte64.c mte64.h
-
-tags: mte64.c
-	ctags mte64.c
+tags:
+	ctags *.c
 

@@ -1,17 +1,16 @@
-#include <stdint.h>
-
-#include "mte64.h"
-
 #include <assert.h>
 #include <errno.h>
 #include <signal.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "mte64.h"
 
 // public stuff {{{
 #if INTERFACE
@@ -493,7 +492,6 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
     AL = AL & junk_len_mask;
     if (AL < BL) {
       // commit arguments for ops {{{
-      D("do register init BX=%lx CX=%lx\n", BX, CX);
 
       // check if we're on a boundary
       // i.e. doing the second arg from the op
@@ -2053,7 +2051,7 @@ static void emit_ops()
 
   AL = last_op_flag;
 
-  // flip op direction, neg req? {{{2
+  // flip op direction, neg req? {{{
   if (!SIGNBIT(AL) && // nothing pending
       ((AL &= 7) == 0 || (AL != ptr_reg && AL >= 3))) {
     // flip direction
@@ -2769,6 +2767,15 @@ static void encrypt_target()
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out)
 {
+  junk_len_mask = 0xf;
+  for (int i = 0; i < 2000; i++) {
+    memset(ops, -1, sizeof(ops));
+    memset(ops_args, -1, sizeof(ops_args));
+    make_ops_table(junk_len_mask);
+    dump_ops_table();
+  }
+  exit(0);
+
 #if DEBUG
   test();
 #endif
@@ -2857,8 +2864,8 @@ static void test()
   // REG_CX}; D("%hx %hx %hx %hx\n", m.mod, m.reg1, m.reg, m.byte);
   // D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER}.byte);
   // D("%x\n", (mrm_t){.op_f7.mod = MRM_MODE_INDEX_DISP32, .op_f7 =
-  // OPCODE_F7_NEG}.byte); D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER, .op_f7
-  // = OPCODE_F7_NEG, .reg = REG_CX} .byte);
+  // OPCODE_F7_NEG}.byte); D("%x\n", (mrm_t){.mod = MRM_MODE_REGISTER,
+  // .op_f7 = OPCODE_F7_NEG, .reg = REG_CX} .byte);
 
   memcpy(ops, (op_t[]){1, 6, 7, 0, 4, 8, 1, 0, 0, 0}, 10 * sizeof(ops[0]));
   // check enum vs raw
