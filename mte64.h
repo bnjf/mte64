@@ -3,7 +3,7 @@
 typedef struct mut_output mut_output;
 typedef struct mut_input mut_input;
 mut_output *mut_engine(mut_input *f_in,mut_output *f_out);
-uint32_t integer_inverse(uint32_t a);
+long int rnd_n(int RANGE);
 #define LOCAL static
 typedef union mrm_t mrm_t;
 enum reg16_t {
@@ -31,7 +31,8 @@ enum opcode_80_t {
   OPCODE_80_SBB,
   OPCODE_80_AND,
   OPCODE_80_SUB,
-  OPCODE_80_XOR
+  OPCODE_80_XOR,
+  OPCODE_80_CMP
 };
 typedef enum opcode_80_t opcode_80_t;
 enum opcode_f7_t {
@@ -92,12 +93,15 @@ enum opcode_t {
   OPCODE_MOV_REG_MRM16 = 0x8B
 };
 typedef enum opcode_t opcode_t;
+enum reg_set_t { REG_SET_BUSY = 0, REG_SET_FREE = 0xff };
+typedef enum reg_set_t reg_set_t;
+#define LOCAL_INTERFACE 0
 enum op_t {
   // loads and stores
-  OP_DATA,         // mov ptr_reg,data_reg || mov data_reg,ptr_reg
-  OP_START_OR_END, // mov ptr,imm || mov data,ptr
-  OP_POINTER,      // mov [ptr],data_reg || mov data_reg,[ptr]
-                   // invertible ops
+  OP_VAL_IMM, // constant
+  OP_TARGET,  // variable from data_reg (or [ptr_reg] during BP==0)
+  OP_VAR_PTR, // variable from ptr_reg
+  // invertible ops
   OP_SUB,
   OP_ADD,
   OP_XOR,
@@ -114,9 +118,6 @@ enum op_t {
   OP_JNZ
 };
 typedef enum op_t op_t;
-enum reg_set_t { REG_SET_BUSY = 0, REG_SET_FREE = 0xff };
-typedef enum reg_set_t reg_set_t;
-#define LOCAL_INTERFACE 0
 struct mut_output {
   uint8_t *code;              // ds:DX
   unsigned int len;           // CX

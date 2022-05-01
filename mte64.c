@@ -91,14 +91,13 @@ struct mut_output {
 // }}}
 
 // enums {{{
-#if LOCAL_INTERFACE
-enum reg_set_t { REG_SET_BUSY = 0, REG_SET_FREE = 0xff };
+#if INTERFACE
 enum op_t {
   // loads and stores
-  OP_DATA,         // mov ptr_reg,data_reg || mov data_reg,ptr_reg
-  OP_START_OR_END, // mov ptr,imm || mov data,ptr
-  OP_POINTER,      // mov [ptr],data_reg || mov data_reg,[ptr]
-                   // invertible ops
+  OP_VAL_IMM, // constant
+  OP_TARGET,  // variable from data_reg (or [ptr_reg] during BP==0)
+  OP_VAR_PTR, // variable from ptr_reg
+  // invertible ops
   OP_SUB,
   OP_ADD,
   OP_XOR,
@@ -114,6 +113,9 @@ enum op_t {
   // dummy jump
   OP_JNZ
 };
+#endif
+#if LOCAL_INTERFACE
+enum reg_set_t { REG_SET_BUSY = 0, REG_SET_FREE = 0xff };
 enum opcode_t {
   OPCODE_ADD = 0x03,
   OPCODE_OR = 0x0B,
@@ -142,7 +144,8 @@ enum opcode_80_t {
   OPCODE_80_SBB,
   OPCODE_80_AND,
   OPCODE_80_SUB,
-  OPCODE_80_XOR
+  OPCODE_80_XOR,
+  OPCODE_80_CMP
 };
 enum reg16_t {
   REG_AX = 0,
@@ -203,9 +206,9 @@ union mrm_t {
 // OPCODE_XOR};
 LOCAL const char *op_to_str[] = {
     // data loads
-    [OP_DATA] = "MOV_REG",
-    [OP_START_OR_END] = "MOV_KEY",
-    [OP_POINTER] = "MOV_DATA",
+    [OP_VAL_IMM] = "#",
+    [OP_TARGET] = "x",
+    [OP_VAR_PTR] = "%ptr",
     // general ops (invertible)
     [OP_SUB] = "SUB",
     [OP_ADD] = "ADD",
@@ -286,6 +289,7 @@ LOCAL struct {
 // local prototypes for static funcs {{{
 static uint8_t _get_op_arg(int);
 static void dump_all_regs();
+static void dump_ops_table();
 static void dump_ops_tree_as_stack(int);
 static void emit_81_ops();
 static void emit_eol_bl();
@@ -467,10 +471,18 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
   op_next_idx = 1;
   DI = (uintptr_t)&op_end_idx;
 
-  ops[0] = OP_START_OR_END;
-  ops[1] = OP_START_OR_END | 0x80; // head op, reg init
+  ops[0] = OP_TARGET;
+  ops[1] = OP_TARGET | 0x80; // head op, reg init
 
   do {
+    if (op_next_idx >= 0x21) {
+      make_ops_table(junk_len_mask);
+      return;
+      dump_ops_table();
+      assert(op_next_idx < 0x21);
+    }
+
+    // dump_ops_table();
     DX = random();
     AX = random();
 
@@ -506,12 +518,14 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
     last_op:
       AL = 0; // reg load/store
       if (!cpu_state.z) goto save_op_idx;
+      // generating loop?
       cpu_state.z = BP == 0;
       if (!cpu_state.z) {
         DL |= 1;
         goto check_arg;
       }
-      AL = 2; // data load/store
+      // if we're generating the loop, we can use the pointer reg
+      AL = OP_VAR_PTR;
 
     save_op_idx:
       cpu_state.c = 0;
@@ -519,9 +533,9 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
       // save_op_idx
       if (CH & 0x80) {
         op_end_idx = SI;
-        AL = OP_START_OR_END;
+        // if the flag's set, insert a move to save the result
+        AL = OP_TARGET;
       }
-      assert(SI < 0x21);
       ops[SI] = AL;
       // }}}
     }
@@ -530,13 +544,20 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
       cpu_state.c = 0; // from CMP AL,BL @L480
 
       SWAP(AX, DX);
-      // because 12 isn't congruent to the wordsize, there's a very small
-      // bias towards 0..3 by 0.002%
-      AL = AL % 12;
+      // because 12 isn't congruent to the 256, there's a small
+      // bias towards 0..3 (i.e. SUB/ADD/XOR/MUL) by around 5% with
+      // `AAM 12`.  let's rand in range.
+      //
+      // AL = AL % 12;
+      AL = rnd_n(12);
 
       CH = CH & 0x80;
       if (CH != 0) { AL = shr8(AL); }
       AX += 3;
+#if 1
+      // only sub/add/mul
+      AL = (int[]){3, 4, 6}[rnd_n(3)];
+#endif
       AH = AL;
       assert(SI < 0x21);
       ops[SI] = AL;
@@ -578,33 +599,59 @@ static uint8_t _get_op_arg(int i)
   assert(sizeof(ops_args[0]) == 4); // otherwise need to adjust the arith
   uint8_t rv = ((uint8_t *)(&ops_args))[(i & -2) << 1 | (i & 1)];
   // D("%x\n", rv);
-  assert(rv <= 0x21);
+  // assert(rv <= 0x21);
   return rv;
 }
 
 static void dump_ops_table()
 {
-#if !DEBUG
+#if !DEBUG || NDEBUG
   return;
 #endif
+  for (int i = 0; i < 0x21 && ops[i] != -1; i++) {
+    printf("%5i%s", i,
+           op_idx == i
+               ? "^"
+               : op_next_idx == i
+                     ? "."
+                     : op_free_idx == i ? "+" : op_end_idx == i ? "$" : " ");
+  }
+  printf("\n");
+  for (int i = 0; i < 0x21 && ops[i] != -1; i++) {
+    // printf("%4hd%c", ops[i] & 0x7f, "^ "[!(ops[i] & 0x80)]);
+    const char *p = op_to_str[ops[i] & 0x7f];
+    printf("%5s%c", &p[strlen(p) > 4 ? strlen(p) - 4 : 0],
+           "^ "[!(ops[i] & 0x80)]);
+  }
+  printf("\n");
+  for (int i = 0; i < 0x21 && ops[i] != -1; i++) {
+    if (ops[i] < 3) { printf(" %04hx ", ops_args[i]); }
+    else {
+      printf(" %2d,%-2d", ops_args[i] & 0xff, (ops_args[i] >> 8) & 0xff);
+    }
+  }
+  printf("\n\n");
+  return;
+
   printf("ops table (i=%hu, free=%d, next=%d, end=%d)\n", op_idx, op_free_idx,
          op_next_idx, op_end_idx);
-  for (int i = 0; i <= op_free_idx; i++) {
+  // for (int i = 0; i <= op_free_idx; i++) {
+  for (int i = 0; i <= 0x21 && ops[i] != -1; i++) {
     if (ops[i] >= 3) {
-      printf("%d\t%-10s (%x)\t#%u, #%u\n", i, op_to_str[ops[i] & 0x7f],
+      printf("%d\t%-10s %d\t#%u, #%u\n", i, op_to_str[ops[i] & 0x7f],
              ops[i] & 0x7f, _get_op_arg(i * 2), _get_op_arg((i * 2) + 1));
     }
     else {
       if (ops_args[i]) {
-        printf("%d\t%-10s (%x)\t%04x\n", i, op_to_str[ops[i] & 0x7f],
+        printf("%d\t%-10s %d\t%04x\n", i, op_to_str[ops[i] & 0x7f],
                ops[i] & 0x7f, ops_args[i]);
       }
       else {
         // XXX shouldn't have arg=0 for op=0 or op=2
-        assert(ops[i] != 0);
-        assert(ops[i] != 2);
+        // assert(ops[i] != 0);
+        // assert(ops[i] != 2);
         printf(
-            "%d\t%-10s (%x)\t%s\n", i,
+            "%d\t%-10s %d\t%s\n", i,
             (char *[]){"REG = REG XXX", "MOV_KEY", "REG = [ptr]XXX"}[ops[i]],
             ops[i], (char *[]){"XXX", "LAST_REG", "[P]"}[ops[i]]);
       }
@@ -722,7 +769,7 @@ static void invert_ops()
   D("starting at idx=%u\n", op_end_idx);
 
   AL = op_end_idx;
-  assert(AL <= 127);
+  assert(AL < 0x21);
   (void)CBW(A);
   AL <<= 1; // clearing the top bit off
 
@@ -737,8 +784,8 @@ static void invert_ops()
   return;
 }
 
-// https://arxiv.org/pdf/2204.04342.pdf
-uint32_t integer_inverse(uint32_t a)
+// https://arxiv.org/pdf/2204.04342.pdf {{{
+static uint32_t integer_inverse(uint32_t a)
 {
   assert(a % 2 == 1);
   uint32_t x0 = (3 * a) ^ 2; // See section 5, formula 3.
@@ -755,29 +802,34 @@ uint32_t integer_inverse(uint32_t a)
   // uint32_t x4 = x3 * (1 + y);
   // return x4;
 }
+// }}}
 
 static void invert_ops_loop()
 {
   do {
     get_op_loc();
-    // no more dependents, now do ops[0]
-    if (cpu_state.c) { AL = 0; }
+    uint8_t i = BL;
+    assert(BX < 0x42);
+    if (cpu_state.c) {
+      // no more dependents, now do ops[0]
+      D("no more dependents for %u %u\n", AX, BX);
+      AL = 0;
+    }
     PUSH(AX);
     AL >>= 1;
-    assert(BX < 0x42);
 
     _set_op_arg(BX, AL); // push down
 
     // emulate SHR's flag generation for the LAHF/SAHF
     BX = shr8(BL);
     AH = cpu_state.flags8; // LAHF
-    AL = ops[BX] & 0x7f;
+    AL = ops[BX] & 0x7f;   // ?!
 
     D("inverting %s\n", op_to_str[AL]);
     // sub?
     if (AL == OP_SUB) {
       cpu_state.flags8 = AH;
-      if (cpu_state.c) {
+      if (i & 1) {
         // don't sub->add if we're on the second arg
         goto done;
       }
@@ -787,13 +839,16 @@ static void invert_ops_loop()
     // add?
     else if (AL == OP_ADD) {
       cpu_state.flags8 = AH;
-      if (cpu_state.c) {
+      if (i & 1) {
         // doing second/upper arg?
         SI = BX;
         // switch arguments
-        uint8_t l = _get_op_arg(BX + SI), r = _get_op_arg(BX + SI + 1);
-        _set_op_arg(BX + SI, r);
-        _set_op_arg(BX + SI + 1, l);
+        uint8_t l, r;
+        i &= ~1; // even boundary
+        l = _get_op_arg(i);
+        r = _get_op_arg(i + 1);
+        _set_op_arg(i, r);
+        _set_op_arg(i + 1, l);
       }
       // invert add #x,#y as sub #x,#y (or #y,#x if the upper arg)
       // sub
@@ -812,8 +867,6 @@ static void invert_ops_loop()
     }
     else {
       assert(AL == OP_MUL);
-      D("inverting op @ %lx: %s (%x) arg=%x\n", BX, op_to_str[AL], AL,
-        ops_args[BX]);
       assert(BX < 0x21);
       BX = _get_op_arg(BX * 2 + 1);
       assert(BX < 0x21);
@@ -821,28 +874,33 @@ static void invert_ops_loop()
       CX = AX = 0;
       DI = DX = 1;
       // @@gcd_loop {{{
-      while ((ops_args[BX] = DI), SI != 1) {
-        union {
-          struct {
-            uint32_t lo, hi;
-          };
-          uint64_t x;
-        } r;
-        r.lo = AX;
-        r.hi = DX;
-        D("%lx\n", r.x);
-        AX = r.x / SI;
-        DX = r.x % SI;
-        PUSH(DX);
-        r.x = AX * DI;
-        CX -= r.lo;
-        SWAP(CX, DI);
-        AX = SI;
-        DX = 0;
-        POP(SI);
-      }
-      assert(ops_args[BX] * integer_inverse(ops_args[BX]) == 1);
+      /*while ((ops_args[BX] = DI), SI != 1) {
+       *  union {
+       *    struct {
+       *      uint32_t lo, hi;
+       *    };
+       *    uint64_t x;
+       *  } r;
+       *  r.lo = AX;
+       *  r.hi = DX;
+       *  D("%lx\n", r.x);
+       *  AX = r.x / SI;
+       *  DX = r.x % SI;
+       *  PUSH(DX);
+       *  r.x = AX * DI;
+       *  CX -= r.lo;
+       *  SWAP(CX, DI);
+       *  AX = SI;
+       *  DX = 0;
+       *  POP(SI);
+       *}
+       */
       // }}}
+      ops_args[BX] = DI = integer_inverse(SI);
+      D("inverted MUL: 1 == %u * %u\n", DI, SI);
+      SI = 1;
+      CX = DX = 0;
+      assert(ops_args[BX] * integer_inverse(ops_args[BX]) == 1);
       goto done;
     }
   store:
@@ -1240,7 +1298,7 @@ static void exec_enc_stage()
   asm("push %%rbp\n\t"
       "movq %0,%%rax\n\t"
       "movq %1,%%rbp\n\t"
-      "call %4\n\t"
+      "call *%4\n\t"
       "movq %%rbp,%3\n\t"
       "movq %%rax,%2\n\t"
       "pop %%rbp"
@@ -2055,14 +2113,15 @@ static void emit_ops()
   if (!SIGNBIT(AL) && // nothing pending
       ((AL &= 7) == 0 || (AL != ptr_reg && AL >= 3))) {
     // flip direction
+    D("flipping\n");
     *((uint8_t *)DI - 2) ^= 2;
     if (last_op_flag & 0x40) {
       PUSH(AX);
       // 3 == mode reg reg
-      AH = (mrm_t){.op_f7.mod = MRM_MODE_REGISTER,
-                   .op_f7.op = OPCODE_F7_NEG,
-                   .op_f7.reg = AL}
-               .byte;
+      AH = ((mrm_t){.op_f7.mod = MRM_MODE_REGISTER,
+                    .op_f7.op = OPCODE_F7_NEG,
+                    .op_f7.reg = AL}
+                .byte);
       assert((AH & ~7) == (0xc0 | (OPCODE_F7_NEG << 3)));
       AL = 0xf7;
       emitw(AX);
@@ -2073,7 +2132,7 @@ static void emit_ops()
   }
   // }}}
 
-  // otherwise pick an available register {{{2
+  // otherwise pick an available register {{{
   // emit_ops::@@pick_reg
   AX = random();
   CX = 8; // 8 attempts
@@ -2457,7 +2516,7 @@ static void store_data_reg()
 
   POP(AX);
 
-  BL = 0xb; // OR
+  BL = 0x0B; // OR
   AL -= 9;
   if (AL != 0) {
     BL = 0x23; // AND
@@ -2470,10 +2529,13 @@ static void store_data_reg()
     }
     BL = 0x33; // OPCODE_XOR
     if (++AX) {
-      BL = 0x3; // OPCODE_ADD
+      BL = 0x03; // OPCODE_ADD
       if (is_parity_even(AX)) {
         assert(is_parity_even(cpu_state.ax));
-        BL = 0x2b; // OPCODE_SUB
+        BL = 0x2B; // OPCODE_SUB
+      }
+      else {
+        assert(!is_parity_even(cpu_state.ax));
       }
     }
   }
@@ -2530,6 +2592,9 @@ static void emit_ops_try_optimization()
   //
   //  none of these optimizations impact the carry flag when they're
   //  executed
+
+  // ... nb. the signbit will be on AX if the op was sub/add/xor, and we
+  // didn't emit anything (encode_mrm() would've reset it)
   if (!SIGNBIT(AX)) {
     // xor?
     if (BL != 0x35) {
@@ -2551,7 +2616,7 @@ static void emit_ops_try_optimization()
   }
   if (SIGNBIT(DX)) {
     DX = -DX;
-    BL ^= 0x28; // toggle add/sub
+    BL ^= (0x2B ^ 0x03); // toggle add/sub
   }
   // emit_ops::@emit_inc
   AL = (BL == 5 ? 0x40 : 0x48) | AL; // add,sub=>inc,dec
@@ -2588,11 +2653,16 @@ static void emit_81_ops()
 {
   // implied by the `or AL,AL` at entry (or clears c)
   cpu_state.c = 0;
-  if (AL != 0) {
-    BL = (mrm_t){.op_80.mod = MRM_MODE_REGISTER,
-                 .op_80.op = (BL >> 3),
-                 .op_80.reg = AL}
-             .byte;
+  if (AL != REG_AX) {
+    assert((0300 | (BL & 070) | AL) ==
+           ((mrm_t){.op_80.mod = MRM_MODE_REGISTER,
+                    .op_80.op = (BL >> 3),
+                    .op_80.reg = AL}
+                .byte));
+    BL = ((mrm_t){.op_80.mod = MRM_MODE_REGISTER,
+                  .op_80.op = (BL >> 3),
+                  .op_80.reg = AL}
+              .byte);
 
     // if imm16 == signextend(imm8), optimize into imm8
     AL = DL;
@@ -2767,18 +2837,27 @@ static void encrypt_target()
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out)
 {
-  junk_len_mask = 0xf;
-  for (int i = 0; i < 2000; i++) {
+  srandom(3);
+  junk_len_mask = (1 << 5) - 1;
+  BP = 0;
+  for (int i = 0; i < 2000000; i++) {
     memset(ops, -1, sizeof(ops));
-    memset(ops_args, -1, sizeof(ops_args));
+    memset(ops_args, 0, sizeof(ops_args));
     make_ops_table(junk_len_mask);
-    dump_ops_table();
+    int ref = 0;
+    for (int i = 0; i < 0x21 && ops[i] != -1; i++) {
+      if (ops[i] == OP_TARGET) ref++;
+    }
+    // printf("%d\n", mem_ref);
+    if (ref >= 3) {
+      dump_ops_table();
+      invert_ops();
+      dump_ops_table();
+      exit(0);
+    }
   }
   exit(0);
 
-#if DEBUG
-  test();
-#endif
   // in = f_in;
   // out = f_out;
   stackp = stack + STACK_SIZE - 1;
