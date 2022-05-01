@@ -897,7 +897,7 @@ static void invert_ops_loop()
        */
       // }}}
       ops_args[BX] = DI = integer_inverse(SI);
-      D("inverted MUL: 1 == %u * %u\n", DI, SI);
+      D("inverted MUL: 1 == %lu * %lu\n", DI, SI);
       SI = 1;
       CX = DX = 0;
       assert(ops_args[BX] * integer_inverse(ops_args[BX]) == 1);

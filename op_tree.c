@@ -24,7 +24,7 @@ op_node_t *make_ops_tree(mut_routine_size_t junk_mask_len, int phase)
   int op_free_idx; // next
   int op_end_idx;  // tail
 
-  t[0].op = t[1].op = OP_MOV_REG;
+  t[0].op = t[1].op = OP_TARGET;
   t[0].pending = 0;
   t[1].pending = 1;
 
@@ -38,7 +38,7 @@ op_node_t *make_ops_tree(mut_routine_size_t junk_mask_len, int phase)
     // mul needs a reg init
     if (left->op == OP_MUL) {
       left->value = random() | 1;
-      left->op = OP_IMM;
+      left->op = OP_VAL_IMM;
     }
     op_next_idx++;
   }

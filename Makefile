@@ -1,5 +1,10 @@
 
-CFLAGS?=-g -DDEBUG -Wall -pedantic-errors -Wno-unused-function \
+CFLAGS?=-g -DDEBUG \
+	-Wall \
+	-Wno-unused-function \
+	-Wno-unused-variable \
+	-Wunused-but-set-variable \
+	-pedantic-errors \
 	-O -march=native
 LDFLAGS?=
 
