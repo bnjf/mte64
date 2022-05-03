@@ -475,11 +475,10 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
   ops[1] = OP_TARGET | 0x80; // head op, reg init
 
   do {
+    // generated too many ops?
     if (op_next_idx >= 0x21) {
       make_ops_table(junk_len_mask);
       return;
-      dump_ops_table();
-      assert(op_next_idx < 0x21);
     }
 
     // dump_ops_table();
@@ -554,7 +553,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
       CH = CH & 0x80;
       if (CH != 0) { AL = shr8(AL); }
       AX += 3;
-#if 1
+#if 0
       // only sub/add/mul
       AL = (int[]){3, 4, 6}[rnd_n(3)];
 #endif
@@ -603,6 +602,83 @@ static uint8_t _get_op_arg(int i)
   return rv;
 }
 
+LOCAL struct node_t {
+  op_t op;
+  struct node_t *left;
+  struct node_t *right;
+  uint32_t x;
+} t[0x21];
+LOCAL struct node_t *_get_node(unsigned int i)
+{
+  assert(i < 0x21);
+  t[i] = ops[i] < 3
+             ? (struct node_t){.op = ops[i],
+                               .left = NULL,
+                               .right = NULL,
+                               .x = ops_args[i]}
+             : (struct node_t){.op = ops[i],
+                               .left = _get_node(ops_args[i] & 0xff),
+                               .right = _get_node((ops_args[i] >> 8) & 0xff),
+                               .x = 0};
+  return &t[i];
+}
+static int tree_to_infix_traverse(struct node_t n)
+{
+  switch (n.op) {
+  case 0:
+  case 2:
+    return printf("%u", n.x);
+  case 1:
+    return printf("x");
+  default:
+
+    // printf("(");
+    printf("%s(", op_to_str[n.op]);
+    tree_to_infix_traverse(*n.left);
+    printf(", ");
+    // printf(" %s ", op_to_str[n.op]);
+    tree_to_infix_traverse(*n.right);
+    printf(")");
+    return 0;
+  }
+}
+
+static int tree_to_infix(int head)
+{
+  struct node_t *n = _get_node(head);
+  tree_to_infix_traverse(t[head]);
+  return 0;
+}
+static void dump_ops_tree_as_dot()
+{
+  static int id = 0;
+  dump_ops_table();
+  printf("subgraph G%u {\n", id);
+  printf("// end is %c%u\n", 'a' + id, op_idx);
+  for (int i = 0; i < 0x21 && ops[i] != -1; i++) {
+    if (id == 0 && i == 0) { printf("%c1 -> %c0;\n", 'a' + id, 'a' + id); }
+    else if (id == 1 && i == 0) {
+      printf("%c1 -> %c2;\n", 'a' + id, 'a' + id);
+    }
+
+    if (ops[i] < 3) {
+      if (ops[i] == 1) {
+        printf("%c%u [label=\"%s\"];\n", 'a' + id, i, op_to_str[ops[i]]);
+      }
+      else {
+        printf("%c%u [label=\"%u\"];\n", 'a' + id, i, ops_args[i]);
+      }
+    }
+    else {
+      printf("%c%u [label=\"%s\"];\n"
+             "%c%u -> { %c%u %c%u };\n",
+             'a' + id, i, op_to_str[ops[i]], 'a' + id, i, 'a' + id,
+             _get_op_arg(i * 2), 'a' + id, _get_op_arg(i * 2 + 1));
+    }
+  }
+  printf("}\n");
+  id++;
+}
 static void dump_ops_table()
 {
 #if !DEBUG || NDEBUG
@@ -775,7 +851,7 @@ static void invert_ops()
 
   get_op_loc();
   if (cpu_state.c) {
-    dump_ops_table();
+    // dump_ops_table();
     D("couldn't find a dependent of op_end_idx=%x, returning!\n", AL);
     return;
   }
@@ -812,7 +888,7 @@ static void invert_ops_loop()
     assert(BX < 0x42);
     if (cpu_state.c) {
       // no more dependents, now do ops[0]
-      D("no more dependents for %u %u\n", AX, BX);
+      D("no more dependents for %lu %lu\n", AX, BX);
       AL = 0;
     }
     PUSH(AX);
@@ -1220,8 +1296,8 @@ static void emit_mov()
   SWAP(AX, DX);
   emitd(AX);
 
-  // we need the pointer reg to have a 64-bit address, but also have the lower
-  // 32 bits equal to -PAYLOAD_SIZE
+  // we need the pointer reg to have a 64-bit address, but also have the
+  // lower 32 bits equal to -PAYLOAD_SIZE
   if (SIGNBIT(AX) && DL == (0xb8 | ptr_reg)) {
     D("ptr_reg=%x data_reg=%x dx=%lx\n", ptr_reg, data_reg, DX);
     assert(DL == (0xb8 | ptr_reg) || DL == (0xb8 | data_reg));
@@ -1880,9 +1956,9 @@ static void single_ref()
   // 0x40->0x47 are REX prefixes now.  we can either encode:
   //   0x48 0xFF (0xC0 | reg)
   //
-  // or... we're using a u64 index, so let's encode the upper bits of the addr
-  // in there.  we can then explicitly test we we wrapped the u32 part with a
-  // TEST.
+  // or... we're using a u64 index, so let's encode the upper bits of the
+  // addr in there.  we can then explicitly test we we wrapped the u32 part
+  // with a TEST.
   AL |= 0x40;
 
   emitb(0x48); // rex
@@ -2011,8 +2087,8 @@ static void patch_offsets()
 
 static void patch()
 {
-  // XXX i forgot about the optmization that's done when signed imm8 == imm16,
-  // but that's not for memory ops
+  // XXX i forgot about the optmization that's done when signed imm8 ==
+  // imm16, but that's not for memory ops
   AX = AX - arg_size_neg;
   assert(BX != 0);
   D("patching [%lx] with %lx\n", BX, AX);
@@ -2294,11 +2370,10 @@ static void emit_ops_maybe_rol(int is_rotate)
     // 0x1f 8086, generating decrypter; 0xff 286+, generating decrypter
 
     /*
-     * this was originally written for u16, where we could avoid rotates by >8
-     * by negating the argument  e.g.
-     *   ROL AX,15 -> ROR AX,1
-     * for u32 we'll need to optimize for rotates by >16, but we're currently
-     * clamping rotates at 0xf.
+     * this was originally written for u16, where we could avoid rotates by
+     * >8 by negating the argument  e.g. ROL AX,15 -> ROR AX,1 for u32 we'll
+     * need to optimize for rotates by >16, but we're currently clamping
+     * rotates at 0xf.
      */
     if ((DL & 0x10)) {
       // DL = -DL;
@@ -2837,24 +2912,26 @@ static void encrypt_target()
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out)
 {
-  srandom(3);
-  junk_len_mask = (1 << 5) - 1;
+  srandom(12);
+  junk_len_mask = (1 << 4) - 1;
   BP = 0;
   for (int i = 0; i < 2000000; i++) {
     memset(ops, -1, sizeof(ops));
     memset(ops_args, 0, sizeof(ops_args));
     make_ops_table(junk_len_mask);
-    int ref = 0;
-    for (int i = 0; i < 0x21 && ops[i] != -1; i++) {
-      if (ops[i] == OP_TARGET) ref++;
-    }
-    // printf("%d\n", mem_ref);
-    if (ref >= 3) {
-      dump_ops_table();
-      invert_ops();
-      dump_ops_table();
-      exit(0);
-    }
+    /* int ref[3] = {0}; */
+    /* for (int i = 0; i < 0x21 && ops[i] != -1; i++) { */
+    /*   if (ops[i] < 3) ref[ops[i]]++; */
+    /* } */
+    /* printf("%d\n", ref[1]); */
+    dump_ops_tree_as_dot();
+    // tree_to_infix(op_idx);
+    printf("\n");
+    invert_ops();
+    dump_ops_tree_as_dot();
+    // tree_to_infix(op_idx);
+    printf("\n");
+    exit(0);
   }
   exit(0);
 

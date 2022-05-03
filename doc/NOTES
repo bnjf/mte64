@@ -82,3 +82,13 @@ XOR, MUL, ROL, ROR.
 I've been converting the raw values into enums, and forgot that they're ints.
 For example, SIGNBIT(ops[i]) always returns 0 because it's originally a u8.
 
+** single ref
+
+it does appear that the target load/store can appear 3 times in 8.4% of
+generated trees:
+
+- 2 [1831932]: ################################################## (91.60%)
+- 3 [168068]: #### (8.40%)
+
+Which lines up with what's in "Mutation Engine Report" (Tarkan Yetiser).
+
