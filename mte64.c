@@ -481,7 +481,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
       return;
     }
 
-    // dump_ops_table();
+    dump_ops_table();
     DX = random();
     AX = random();
 
@@ -507,6 +507,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
       // check if we're on a boundary
       // i.e. doing the second arg from the op
       BL = shr8(BL);
+      D("carry: %u\n", cpu_state.c);
       if (!cpu_state.c) goto check_arg;
       cpu_state.z = CL == 0;
       if (cpu_state.z) goto last_op;
@@ -632,12 +633,14 @@ static int tree_to_infix_traverse(struct node_t n)
     return printf("x");
   default:
 
-    // printf("(");
-    printf("%s(", op_to_str[n.op]);
+    printf("(");
+    // printf("%s(", op_to_str[n.op]);
+    // printf("(%s ", op_to_str[n.op]);
     tree_to_infix_traverse(*n.left);
-    printf(", ");
-    // printf(" %s ", op_to_str[n.op]);
+    printf(" %s ", op_to_str[n.op]);
+    // printf(" ");
     tree_to_infix_traverse(*n.right);
+    // printf(" %s", op_to_str[n.op]);
     printf(")");
     return 0;
   }
@@ -2912,27 +2915,34 @@ static void encrypt_target()
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out)
 {
-  srandom(12);
-  junk_len_mask = (1 << 4) - 1;
+  junk_len_mask = (1 << 1) - 1;
   BP = 0;
-  for (int i = 0; i < 2000000; i++) {
-    memset(ops, -1, sizeof(ops));
-    memset(ops_args, 0, sizeof(ops_args));
-    make_ops_table(junk_len_mask);
-    /* int ref[3] = {0}; */
-    /* for (int i = 0; i < 0x21 && ops[i] != -1; i++) { */
-    /*   if (ops[i] < 3) ref[ops[i]]++; */
-    /* } */
-    /* printf("%d\n", ref[1]); */
-    dump_ops_tree_as_dot();
-    // tree_to_infix(op_idx);
-    printf("\n");
-    invert_ops();
-    dump_ops_tree_as_dot();
-    // tree_to_infix(op_idx);
-    printf("\n");
-    exit(0);
+  memset(ops, -1, sizeof(ops));
+  memset(ops_args, 0, sizeof(ops_args));
+  srandom(12);
+  make_ops_table(junk_len_mask);
+  dump_ops_table();
+  srandom(12);
+  op_node_t *t = make_ops_tree(junk_len_mask, BP);
+  for (int i = 0; i <= op_end_idx; i++) {
+    printf("%d op=%i left=%p right=%p pending=%u value=%x\n", i, t[i].op,
+           t[i].left, t[i].right, t[i].pending, t[i].value);
+    assert(ops[i] == (t[i].pending * 0x80) + t[i].op);
+    assert(ops_args[i] == t[i].value);
   }
+
+  /* int ref[3] = {0}; */
+  /* for (int i = 0; i < 0x21 && ops[i] != -1; i++) { */
+  /*   if (ops[i] < 3) ref[ops[i]]++; */
+  /* } */
+  /* printf("%d\n", ref[1]); */
+  // dump_ops_tree_as_dot();
+  // tree_to_infix(op_idx);
+  printf("\n\n");
+  invert_ops();
+  // dump_ops_tree_as_dot();
+  // tree_to_infix(op_idx);
+  // printf("\n");
   exit(0);
 
   // in = f_in;
