@@ -3,6 +3,6 @@ ColumnLimit: 78
 IndentWidth: 2
 AlignTrailingComments: true
 UseTab: Never
-AllowShortIfStatementsOnASingleLine: true 
-AllowShortBlocksOnASingleLine: true 
-BreakBeforeBraces: Stroustrup
+# AllowShortIfStatementsOnASingleLine: true 
+# AllowShortBlocksOnASingleLine: true 
+# BreakBeforeBraces: Stroustrup

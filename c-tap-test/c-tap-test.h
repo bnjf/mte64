@@ -1,8 +1,8 @@
 /* TAP format macros. */
 
-static int tap_count;
-static int tap_todo;
-static int tap_fail;
+static int tap_count=0;
+static int tap_todo=0;
+static int tap_fail=0;
 
 #define ENDLINE {				\
 	if (tap_todo) {				\
@@ -40,7 +40,7 @@ static int tap_fail;
 	ENDLINE;						\
     }
 
-#define TAP_TEST_MSG(x,msg,args...) {			\
+#define TAP_TEST_MSG(x,...) {				\
 	tap_count++;					\
 	if (! (x)) {					\
 	    if (! tap_todo) {				\
@@ -49,7 +49,7 @@ static int tap_fail;
 	    printf ("not ");				\
 	}						\
 	printf ("ok %d - ", tap_count);			\
-	printf (msg, ## args);				\
+	printf (__VA_ARGS__);				\
 	ENDLINE;					\
     }
 

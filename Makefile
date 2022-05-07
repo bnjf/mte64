@@ -3,15 +3,15 @@ CFLAGS?=-g -DDEBUG \
 	-Wall \
 	-Wno-unused-function \
 	-Wno-unused-variable \
-	-Wunused-but-set-variable \
+	-Wno-unused-but-set-variable \
 	-pedantic-errors \
 	-O -march=native
-LDFLAGS?=
+LDFLAGS?=-lefence
 
 all: tags headers demo
 
 clean:
-	rm -f *.[oh]
+	rm -f *.[oh] tags
 
 demo: mte64.o demo.o op_tree.o rnd.o
 
