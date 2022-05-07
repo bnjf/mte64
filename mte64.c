@@ -205,7 +205,7 @@ union mrm_t {
 // LOCAL const uint8_t const opcodes[] = {[OP_ADD] = OPCODE_ADD, [OP_OR] =
 // OPCODE_OR, [OP_AND] = OPCODE_AND, [OP_SUB] = OPCODE_SUB, [OP_XOR] =
 // OPCODE_XOR};
-LOCAL const char *op_to_str[] = {
+LOCAL const char *const op_to_str[] = {
     // data loads
     [OP_VAL_IMM] = "#",
     [OP_TARGET] = "x",
@@ -2887,20 +2887,24 @@ static void encrypt_target() {
 }
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
-  junk_len_mask = (1 << 1) - 1;
+  junk_len_mask = (1 << 4) - 1;
   BP = 0;
-  for (int i = 0; i < 1000000; i++) {
+  // long long w = time(NULL);
+  long long w = 0;
+  int i = 0;
+  while (++i) {
     memset(ops, -1, sizeof(ops));
     memset(ops_args, 0, sizeof(ops_args));
-    srandom(i);
+    D("seeding with %llu\n", i + w);
+    srandom(i + w);
     make_ops_table(junk_len_mask);
     dump_ops_table();
-    srandom(i);
+    srandom(i + w);
     op_node_t *t0 =
         (op_node_t *)malloc(sizeof(op_node_t) * ((junk_len_mask << 1) + 3));
     op_node_t *tx = make_ops_tree(t0, junk_len_mask, BP);
     op_node_t *t = t0;
-    printf("x @ %lu\n", tx - t0);
+    D("x @ %lu\n", tx - t0);
     for (int i = 0; i <= op_free_idx; i++) {
       // printf("%d op=%i left=%p right=%p pending=%u value=%x\n", i, t[i].op,
       //        t[i].left, t[i].right, t[i].pending, t[i].value);

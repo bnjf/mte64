@@ -15,6 +15,26 @@ struct op_node_t {
 };
 #endif
 
+LOCAL const char *const op_to_str[] = {
+    // data loads
+    [OP_VAL_IMM] = "#",
+    [OP_TARGET] = "x",
+    [OP_VAR_PTR] = "%ptr",
+    // general ops (invertible)
+    [OP_SUB] = "SUB",
+    [OP_ADD] = "ADD",
+    [OP_XOR] = "XOR",
+    [OP_MUL] = "MUL",
+    [OP_ROL] = "ROL",
+    [OP_ROR] = "ROR",
+    // junk ops
+    [OP_SHL] = "SHL",
+    [OP_SHR] = "SHR",
+    [OP_OR] = "OR",
+    [OP_AND] = "AND",
+    [OP_IMUL] = "IMUL",
+    // dummy jnz
+    [OP_JNZ] = "JNZ"};
 static op_t save_op_arg(op_node_t *cur_op, op_t val_type, uint32_t val) {
   if (cur_op->pending) {
     val_type = OP_TARGET;
@@ -31,9 +51,11 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
                          int phase) {
   assert(((junk_mask_len + 1) & junk_mask_len) == 0);
 
-  // init
+  // used as the terminal when we invert
   t[0] = (op_node_t){.op = OP_TARGET, .pending = 0};
+  // start
   t[1] = (op_node_t){.op = OP_TARGET, .pending = 1};
+  // init
   op_node_t *root = &t[1];
   op_node_t *cur_op = &t[1];
   op_node_t *cur_arg = &t[1];
@@ -44,37 +66,30 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
     uint32_t r = random();
     uint32_t pick = random() & junk_mask_len;
 
-    printf("cur_op:%lu cur_arg:%lu\n", cur_op - t, cur_arg - t);
+    // printf("cur_op:%lu cur_arg:%lu\n", cur_op - t, cur_arg - t);
 
-    // hacks for mul {{{
+    int zzz = 0;
     if (cur_op->op == OP_MUL) {
-      printf("val:%x r:%x\n", cur_op->value, r);
       if (!cur_op->pending) {
-        r |= 1;
-        if (save_op_arg(cur_op, OP_VAL_IMM, r) == OP_TARGET) {
+        if (save_op_arg(cur_op, 0, r | 1) == OP_TARGET) {
           target_loc = cur_op;
         }
-        count++;
-        cur_op++;
-        continue;
+        goto done;
       } else {
-        ;
+        zzz++;
       }
-    } // }}}
-    if (count > pick) {
-      // inserts a value
+    }
+    if (pick < count + zzz) {
       uint32_t val = r;
       op_t val_type = OP_VAL_IMM;
       // we can use the pointer reg as the argument when we're
       // creating the loop
-      if (((pick % 2) == 1 && (cur_op - 1)->op == 0) ||
-          //((pick % 2) == 0 && (r & 0xff) == 0)) {
-          ((r & 0xff) == 0)) {
+      if (((count % 2) == 1 && (cur_op - 1)->op == OP_VAL_IMM) ||
+          ((val & 0xff) == 0)) {
         if (phase == 0) {
-          printf("using op_var_ptr pick%%2=%u r=%x\n", pick % 2, r);
           val_type = OP_VAR_PTR;
         } else {
-          val |= 1; // dodge 0, it's used to indicate a reg move
+          // val |= 1; // dodge 0, it's used to indicate a reg move
         }
       }
       if (save_op_arg(cur_op, val_type, val) == OP_TARGET) {
@@ -100,6 +115,7 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
       cur_op->pending = 0;
       cur_op->op = cur_op->left->op = cur_op->right->op = new_op;
     }
+  done:
     cur_op++;
     count++; // XXX
   } while (cur_op <= cur_arg);
