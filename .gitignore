@@ -3,6 +3,7 @@
 .*
 !.gitignore
 !.clang-format
+!..gdbinit
 scratch/
 tags
 demo
