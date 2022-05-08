@@ -9,9 +9,11 @@ class OpNodePrinter:
         left = self.val['left']
         right = self.val['right']
 
-        op_to_str = [ "#", "x", "%ptr", "sub", "add", "xor", "mul", "rol", "ror", "shl", "shr", "or", "and_", "imul", "jnz" ]
+        op_to_str = [ "#", "x", "%ptr", "sub", "add", "xor", "mul", "rol", "ror", "shl", "shr", "or_", "and_", "imul", "jnz" ]
 
         if op < 3:
+            if op == 1:
+                return 'x'
             return hex(value)
         else:
             l = left.dereference()

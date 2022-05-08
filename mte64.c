@@ -2868,7 +2868,7 @@ static void encrypt_target() {
 }
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
-  junk_len_mask = (1 << 2) - 1;
+  junk_len_mask = (1 << 4) - 1;
   BP = 1;
   // long long w = time(NULL);
   long long w = 0;

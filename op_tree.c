@@ -174,12 +174,12 @@ op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
 
   for (
       // new_root is our return value
-      new_root = cur = get_parent(root + 1, n), child = n;
+      (new_root = cur = get_parent(root + 1, n)), child = n;
       // until we find no more parents
       cur != NULL && cur != &root[0];
       // ascend
       child = cur,
-      cur = parent) {
+                                                  cur = parent) {
 
     // if we reach the root, put our `x` back in
     if ((parent = get_parent(root + 1, cur)) == NULL) {
@@ -222,6 +222,7 @@ op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
     }
   }
 
+  D("new_root=%lu\n", new_root - root);
   return new_root;
 }
 
