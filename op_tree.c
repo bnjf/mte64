@@ -21,6 +21,13 @@ struct op_node_t {
     x = y;                                                                   \
     y = SWAP;                                                                \
   } while (0)
+#ifndef NDEBUG
+#define D(...)                                                               \
+  do {                                                                       \
+    fprintf(stderr, "[%s:%s L%u] ", __FILE__, __func__, __LINE__);           \
+    fprintf(stderr, __VA_ARGS__);                                            \
+  } while (0)
+#endif
 
 // returns the node with OP_TARGET
 static op_t save_op_arg(op_node_t *cur_op, op_t val_type, uint32_t v) {
@@ -137,9 +144,12 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
   return target_loc;
 }
 
-// find
+// find (don't descend!)
 op_node_t *get_parent(op_node_t *const cur, op_node_t *const n) {
   op_node_t *t;
+  if (cur == n) {
+    return NULL;
+  }
   if (cur->op < 3) {
     return NULL;
   }
@@ -155,50 +165,64 @@ op_node_t *get_parent(op_node_t *const cur, op_node_t *const n) {
   return NULL;
 }
 
-// given a node with a OP_TARGET, invert the dependent ops, and return the
-// new root
+// given a node with an `x`, invert the dependent ops, and return the new root
 op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
-  op_node_t *cur = get_parent(root, n);
+  op_node_t *child;
+  op_node_t *cur;
+  op_node_t *new_root;
+  op_node_t *parent;
 
-  if (!cur) {
-    return NULL;
-  }
+  for (
+      // new_root is our return value
+      new_root = cur = get_parent(root + 1, n), child = n;
+      // until we find no more parents
+      cur != NULL && cur != &root[0];
+      // ascend
+      child = cur,
+      cur = parent) {
 
-  while (cur != &root[0]) {
-    op_node_t *parent;
-    if ((parent = get_parent(root, cur)) == NULL) {
+    // if we reach the root, put our `x` back in
+    if ((parent = get_parent(root + 1, cur)) == NULL) {
       parent = &root[0]; // use the placeholder at index 0
     }
 
-    switch (parent->op) {
+    switch (cur->op) {
     case OP_MUL:
-      cur->value = integer_inverse(cur->value);
+      // mul x,y => mul x*y^{-1}
+      cur->right->value = integer_inverse(cur->right->value);
       break;
     case OP_SUB:
-      if (parent->right == cur) {
-        parent->op = OP_ADD;
+      // sub is left associative
+      if (cur->left == child) {
+        cur->op = OP_ADD;
       }
       break;
     case OP_ADD:
-      parent->op = OP_SUB;
-      if (parent->left == cur) {
-        SWAP(parent->left, parent->right);
+      // add -> sub, but ensure we're on the left
+      cur->op = OP_SUB;
+      if (cur->right == child) {
+        SWAP(cur->left, cur->right);
       }
       break;
     case OP_ROL:
-      parent->op = OP_ROR;
+      cur->op = OP_ROR;
       break;
     case OP_ROR:
-      parent->op = OP_ROL;
+      cur->op = OP_ROL;
       break;
     default:
       break;
     }
 
-    cur = parent;
+    assert(cur->left == child || cur->right == child);
+    if (child == cur->left) {
+      cur->left = parent;
+    } else if (child == cur->right) {
+      cur->right = parent;
+    }
   }
 
-  return cur;
+  return new_root;
 }
 
-// vim:set commentstring=//\ %s
+// vim:set commentstring=//\ %s:

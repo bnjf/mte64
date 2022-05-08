@@ -2872,7 +2872,7 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
   BP = 1;
   // long long w = time(NULL);
   long long w = 0;
-  uint16_t i = 10000;
+  uint16_t i = -1;
   while (i--) {
     BP = ~BP; // flip
     memset(ops, -1, sizeof(ops));
@@ -2886,6 +2886,8 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
     op_node_t *t0 =
         (op_node_t *)malloc(sizeof(op_node_t) * ((junk_len_mask << 1) + 3));
     op_node_t *tx = make_ops_tree(t0, junk_len_mask, BP);
+    assert(tx->op == OP_TARGET);
+    // root at t[1]
     op_node_t *t = invert_ops_tree(t0, tx);
     t = t0;
     for (int i = 0; i <= op_free_idx; i++) {
