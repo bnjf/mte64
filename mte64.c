@@ -2891,8 +2891,8 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
   BP = 0;
   // long long w = time(NULL);
   long long w = 0;
-  int i = 0;
-  while (++i) {
+  uint8_t i = -1;
+  while (i--) {
     memset(ops, -1, sizeof(ops));
     memset(ops_args, 0, sizeof(ops_args));
     D("seeding with %llu\n", i + w);

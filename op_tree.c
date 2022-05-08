@@ -66,30 +66,56 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
     uint32_t r = random();
     uint32_t pick = random() & junk_mask_len;
 
-    // printf("cur_op:%lu cur_arg:%lu\n", cur_op - t, cur_arg - t);
-
-    int zzz = 0;
-    if (cur_op->op == OP_MUL) {
-      if (!cur_op->pending) {
-        if (save_op_arg(cur_op, 0, r | 1) == OP_TARGET) {
-          target_loc = cur_op;
-        }
-        goto done;
-      } else {
-        zzz++;
+    // commit an odd argument for MUL
+    if (cur_op->op == OP_MUL && !cur_op->pending) {
+      if (save_op_arg(cur_op, OP_VAL_IMM, r | 1) == OP_TARGET) {
+        target_loc = cur_op;
       }
+      goto done;
     }
-    if (pick < count + zzz) {
+
+    int pending_mul = (cur_op->op == OP_MUL && cur_op->pending);
+    /* bump count by 1 if there's a MUL waiting for a load */
+    if (pick < (count + pending_mul)) {
       uint32_t val = r;
       op_t val_type = OP_VAL_IMM;
+
+      /**
+        ```asm
+          ; rewritten slightly for clarity
+        @@save_arg:
+          mov  al,0         ; immediate value
+          shr  bl,1         ; n.b. bx++ if pending mul
+          jnb  @@check_arg
+            or   cl,cl      ; z => pending mul (or last op mov)
+            jz @@try_ptr
+          @@check_arg:
+            or dl,dl        ; lower byte !0 can be used as-is
+            jnz @@save_op_idx
+        @@try_ptr:
+          or bp,bp          ; creating loop?
+          jz @@use_ptr
+            or dl,1         ; ... we're not.  oddify.
+            jmp @@save_op_idx
+          @@use_ptr:
+            mov al,2        ; in loop, can use ptr
+        @@save_op_idx:
+        ```
+      */
+
       // we can use the pointer reg as the argument when we're
       // creating the loop
-      if (((count % 2) == 1 && (cur_op - 1)->op == OP_VAL_IMM) ||
-          ((val & 0xff) == 0)) {
+      int pending_mul = (cur_op->op == OP_MUL && cur_op->pending);
+      int is_left = ((count + pending_mul) % 2) == 0;
+      int is_arg_zero = (val & 0xff) == 0;
+      op_t previous_op = (cur_op - 1)->op;
+      if ((is_left && is_arg_zero) ||
+          (!is_left && (previous_op == OP_VAL_IMM || pending_mul)) ||
+          (!is_left && is_arg_zero)) {
         if (phase == 0) {
           val_type = OP_VAR_PTR;
         } else {
-          // val |= 1; // dodge 0, it's used to indicate a reg move
+          val |= 1;
         }
       }
       if (save_op_arg(cur_op, val_type, val) == OP_TARGET) {
