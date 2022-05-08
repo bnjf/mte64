@@ -855,25 +855,6 @@ static void invert_ops() {
   return;
 }
 
-// https://arxiv.org/pdf/2204.04342.pdf {{{
-static uint32_t integer_inverse(uint32_t a) {
-  assert(a % 2 == 1);
-  uint32_t x0 = (3 * a) ^ 2; // See section 5, formula 3.
-  uint32_t y = 1 - a * x0;
-  uint32_t x1 = x0 * (1 + y);
-  y *= y;
-  uint32_t x2 = x1 * (1 + y);
-  y *= y;
-  uint32_t x3 = x2 * (1 + y);
-  return x3;
-  // only need 3 reps for u32:
-  // https://lemire.me/blog/2017/09/18/computing-the-inverse-of-odd-integers/
-  // y *= y;
-  // uint32_t x4 = x3 * (1 + y);
-  // return x4;
-}
-// }}}
-
 static void invert_ops_loop() {
   do {
     get_op_loc();
@@ -2887,24 +2868,26 @@ static void encrypt_target() {
 }
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
-  junk_len_mask = (1 << 4) - 1;
-  BP = 0;
+  junk_len_mask = (1 << 2) - 1;
+  BP = 1;
   // long long w = time(NULL);
   long long w = 0;
-  uint8_t i = -1;
+  uint16_t i = 10000;
   while (i--) {
+    BP = ~BP; // flip
     memset(ops, -1, sizeof(ops));
     memset(ops_args, 0, sizeof(ops_args));
     D("seeding with %llu\n", i + w);
     srandom(i + w);
     make_ops_table(junk_len_mask);
+    invert_ops();
     dump_ops_table();
     srandom(i + w);
     op_node_t *t0 =
         (op_node_t *)malloc(sizeof(op_node_t) * ((junk_len_mask << 1) + 3));
     op_node_t *tx = make_ops_tree(t0, junk_len_mask, BP);
-    op_node_t *t = t0;
-    D("x @ %lu\n", tx - t0);
+    op_node_t *t = invert_ops_tree(t0, tx);
+    t = t0;
     for (int i = 0; i <= op_free_idx; i++) {
       // printf("%d op=%i left=%p right=%p pending=%u value=%x\n", i, t[i].op,
       //        t[i].left, t[i].right, t[i].pending, t[i].value);
@@ -2920,10 +2903,10 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
         TAP_TEST(&t[_get_op_arg(i * 2 + 1)] == t[i].right);
       }
     }
-    TAP_PLAN;
     assert(!tap_fail);
     free(t);
   }
+  TAP_PLAN;
   exit(0);
 
   /* int ref[3] = {0}; */

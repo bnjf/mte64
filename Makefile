@@ -13,7 +13,7 @@ all: tags headers demo
 clean:
 	rm -f *.[oh] tags
 
-demo: mte64.o demo.o op_tree.o rnd.o
+demo: mte64.o demo.o op_tree.o rnd.o integer_inverse.o
 
 headers:
 	makeheaders -v *.[ch]
