@@ -32,7 +32,7 @@ struct op_node_t {
 // returns the node with OP_TARGET
 static op_t save_op_arg(op_node_t *cur_op, op_t val_type, uint32_t v) {
   if (cur_op->pending) {
-    val_type = OP_TARGET;
+    val_type = OPERAND_TARGET;
   }
   cur_op->op = val_type;
   cur_op->pending = 0;
@@ -53,9 +53,10 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
     return NULL;
   }
 
-  // init
-  t[0] = (op_node_t){.op = OP_TARGET, .pending = 0};
-  t[1] = (op_node_t){.op = OP_TARGET, .pending = 1};
+  // init root for when we invert
+  t[0] = (op_node_t){.op = OPERAND_TARGET, .pending = 0};
+  // current root
+  t[1] = (op_node_t){.op = OPERAND_TARGET, .pending = 1};
 
   int count = 1;
   for (cur_op = cur_arg = &t[1]; cur_op <= cur_arg; cur_op++, count++) {
@@ -64,7 +65,7 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
 
     // commit an odd argument for MUL
     if (cur_op->op == OP_MUL && !cur_op->pending) {
-      if (save_op_arg(cur_op, OP_VAL_IMM, r | 1) == OP_TARGET) {
+      if (save_op_arg(cur_op, OPERAND_IMM, r | 1) == OPERAND_TARGET) {
         target_loc = cur_op;
       }
       continue;
@@ -73,7 +74,7 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
     int pending_mul = (cur_op->op == OP_MUL && cur_op->pending);
     /* bump count by 1 if there's a MUL waiting for a load */
     if (pick < (count + pending_mul)) {
-      op_t val_type = OP_VAL_IMM;
+      op_t val_type = OPERAND_IMM;
 
       /**
         ```asm
@@ -106,9 +107,9 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
       op_t previous_op = (cur_op - 1)->op;
 
       if (is_val_zero ||
-          (is_right && (previous_op == OP_VAL_IMM || pending_mul))) {
+          (is_right && (previous_op == OPERAND_IMM || pending_mul))) {
         if (phase == 0) {
-          val_type = OP_VAR_PTR; // can use ptr
+          val_type = OPERAND_PTR; // can use ptr
         } else {
           // this serves two purposes:
           // - avoiding the lower byte being 0 (sentinel for reg move)
@@ -116,32 +117,57 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
           r |= 1;
         }
       }
-      if (save_op_arg(cur_op, val_type, r) == OP_TARGET) {
+      if (save_op_arg(cur_op, val_type, r) == OPERAND_TARGET) {
         target_loc = cur_op;
       }
     } else {
-      op_t new_op = (uint8_t)r % 12; // only non-val ops
+      op_t new_op;
+
       if (cur_op->pending) {
-        new_op /= 2; // [0,6] => don't create junk
+        new_op = (op_t[]){OP_SUB, OP_ADD, OP_XOR, OP_MUL, OP_ROL, OP_ROR}
+            [((uint8_t)r % 12) >> 1];
+      } else {
+        new_op = (op_t[]){
+            OP_SUB, OP_ADD, OP_XOR, OP_MUL, OP_ROL,  OP_ROR,
+            OP_SHL, OP_SHR, OP_OR,  OP_AND, OP_IMUL, OP_JNZ}[(uint8_t)r % 12];
       }
-      new_op += 3; // op_sub .. op_jnz
 
       // allocate our two arguments
       cur_op->left = ++cur_arg;
       cur_op->right = ++cur_arg;
 
-      // flip args
-      if (r % 2 == 0 || new_op >= 6) {
+      switch (new_op) {
+      case OP_SUB:
+      case OP_ADD:
+      case OP_XOR:
+        // flip a coin!
+        if (r % 2 == 1) {
+          cur_op->right->pending = cur_op->pending;
+          break;
+        }
+        // FALLTHROUGH
+      default:
         cur_op->left->pending = cur_op->pending;
-      } else {
-        cur_op->right->pending = cur_op->pending;
+        break;
       }
+
       cur_op->pending = 0;
       cur_op->op = cur_op->left->op = cur_op->right->op = new_op;
     }
   }
 
   return target_loc;
+}
+
+int is_operand(const op_node_t *const n) {
+  switch (n->op) {
+  case OPERAND_IMM:
+  case OPERAND_TARGET:
+  case OPERAND_PTR:
+    return 1;
+  default:
+    return 0;
+  }
 }
 
 // find (don't descend!)
@@ -165,7 +191,8 @@ op_node_t *get_parent(op_node_t *const cur, op_node_t *const n) {
   return NULL;
 }
 
-// given a node with an `x`, invert the dependent ops, and return the new root
+// given a node with an `x`, invert the dependent ops, and return the new
+// root
 op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
   op_node_t *child;
   op_node_t *cur;

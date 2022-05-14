@@ -94,10 +94,10 @@ struct mut_output {
 // enums {{{
 #if INTERFACE
 enum op_t {
-  // loads and stores
-  OP_VAL_IMM, // constant
-  OP_TARGET,  // variable from data_reg (or [ptr_reg] during BP==0)
-  OP_VAR_PTR, // variable from ptr_reg
+  // operands
+  OPERAND_IMM = 0, // constant
+  OPERAND_TARGET,  // variable from data_reg (or [ptr_reg] during BP==0)
+  OPERAND_PTR,     // variable from ptr_reg
   // invertible ops
   OP_SUB,
   OP_ADD,
@@ -115,6 +115,7 @@ enum op_t {
   OP_JNZ
 };
 #endif
+
 #if LOCAL_INTERFACE
 enum reg_set_t { REG_SET_BUSY = 0, REG_SET_FREE = 0xff };
 enum opcode_t {
@@ -207,9 +208,9 @@ union mrm_t {
 // OPCODE_XOR};
 LOCAL const char *const op_to_str[] = {
     // data loads
-    [OP_VAL_IMM] = "#",
-    [OP_TARGET] = "x",
-    [OP_VAR_PTR] = "%ptr",
+    [OPERAND_IMM] = "#",
+    [OPERAND_TARGET] = "x",
+    [OPERAND_PTR] = "%ptr",
     // general ops (invertible)
     [OP_SUB] = "SUB",
     [OP_ADD] = "ADD",
@@ -291,7 +292,7 @@ LOCAL struct {
 static uint8_t _get_op_arg(int);
 static void dump_all_regs();
 static void dump_ops_table();
-static void dump_ops_tree_as_stack(int);
+static void dump_ops_table_as_stack(int);
 static void emit_81_ops();
 static void emit_eol_bl();
 static void emit_f7_op();
@@ -470,8 +471,8 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
   op_next_idx = 1;
   DI = (uintptr_t)&op_end_idx;
 
-  ops[0] = OP_TARGET;
-  ops[1] = OP_TARGET | 0x80; // head op, reg init
+  ops[0] = OPERAND_TARGET;
+  ops[1] = OPERAND_TARGET | 0x80; // head op, reg init
 
   do {
     // generated too many ops?
@@ -480,7 +481,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       return;
     }
 
-    dump_ops_table();
+    // dump_ops_table();
     DX = random();
     AX = random();
 
@@ -505,7 +506,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       // check if we're on a boundary
       // i.e. doing the second arg from the op
       BL = shr8(BL);
-      D("carry: %u\n", cpu_state.c);
+      // D("carry: %u\n", cpu_state.c);
       if (!cpu_state.c)
         goto check_arg;
       cpu_state.z = CL == 0;
@@ -526,7 +527,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
         goto check_arg;
       }
       // if we're generating the loop, we can use the pointer reg
-      AL = OP_VAR_PTR;
+      AL = OPERAND_PTR;
 
     save_op_idx:
       cpu_state.c = 0;
@@ -535,7 +536,7 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       if (CH & 0x80) {
         op_end_idx = SI;
         // if the flag's set, insert a move to save the result
-        AL = OP_TARGET;
+        AL = OPERAND_TARGET;
       }
       ops[SI] = AL;
       // }}}
@@ -550,6 +551,9 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       // `AAM 12`.  let's rand in range.
       //
       // AL = rnd_n(12);
+      if ((AL = rnd_n(3)) == 2) {
+        AL++;
+      }
 
       CH = CH & 0x80;
       if (CH != 0) {
@@ -649,7 +653,8 @@ static int tree_to_infix(int head) {
   tree_to_infix_traverse(t[head]);
   return 0;
 }
-static void dump_ops_tree_as_dot() {
+
+static void dump_ops_table_as_dot() {
   static int id = 0;
   dump_ops_table();
   printf("subgraph G%u {\n", id);
@@ -677,6 +682,44 @@ static void dump_ops_tree_as_dot() {
   printf("}\n");
   id++;
 }
+
+static void dump_ops_tree_as_dot(op_node_t *t, FILE *f) {
+  static int sub_id = 0;
+  static int node_id = 0;
+  static int count = 0;
+
+  count++;
+  if (++sub_id == 3) {
+    fprintf(f, "subgraph clusterG%u {\n", count);
+  }
+
+  if (t->op < 3) {
+    if (t->op == 1) {
+      fprintf(f, "%c_%p [label=\"%s\"];\n", 'a' + node_id, (void *)t,
+              op_to_str[t->op]);
+    } else {
+      fprintf(f, "%c_%p [label=\"%u\"];\n", 'a' + node_id, (void *)t,
+              t->value);
+    }
+  } else {
+    fprintf(f, "%c_%p [label=\"%s\"]; ",
+            // this
+            'a' + node_id, (void *)t, op_to_str[t->op]);
+    dump_ops_tree_as_dot(t->left, f);
+    dump_ops_tree_as_dot(t->right, f);
+    fprintf(f, "%c_%p -> { %c_%p %c_%p }; ",
+            // this
+            'a' + node_id, (void *)t,
+            // left
+            'a' + node_id, (void *)t->left,
+            // right
+            'a' + node_id, (void *)t->right);
+  }
+  if (sub_id-- == 3) {
+    fprintf(f, "}\n");
+  }
+}
+
 static void dump_ops_table() {
 #if !DEBUG || NDEBUG
   return;
@@ -758,21 +801,28 @@ static void dump_ops_tree(int i, int d) {
   }
   return;
 }
-static void dump_ops_tree_as_stack(int i) {
+static void dump_ops_table_as_stack(int i) {
 #if !DEBUG
   return;
 #endif
   assert(i < 0x21);
 
   if (ops[i] >= 3) {
-    dump_ops_tree_as_stack(_get_op_arg(i << 1));
-    dump_ops_tree_as_stack(_get_op_arg((i << 1) + 1));
-    printf("%s ", op_to_str[ops[i]]);
+    printf("(");
+    dump_ops_table_as_stack(_get_op_arg(i << 1));
+    printf(" %s ", op_to_str[ops[i]]);
+    dump_ops_table_as_stack(_get_op_arg((i << 1) + 1));
+    printf(") ");
     return;
   }
 
   if (ops[i] < 3) {
-    printf("%x %s \n", ops_args[i], op_to_str[ops[i]]);
+    // printf("%x %s \n", ops_args[i], op_to_str[ops[i]]);
+    if (ops[i] == 1) {
+      printf("x");
+    } else {
+      printf("%u", ops_args[i]);
+    }
     return;
   }
 
@@ -846,7 +896,6 @@ static void invert_ops() {
 
   get_op_loc();
   if (cpu_state.c) {
-    // dump_ops_table();
     D("couldn't find a dependent of op_end_idx=%x, returning!\n", AL);
     return;
   }
@@ -2872,23 +2921,35 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
   BP = 1;
   // long long w = time(NULL);
   long long w = 0;
-  uint16_t i = -1;
+  unsigned int i = 10000;
   while (i--) {
     BP = ~BP; // flip
     memset(ops, -1, sizeof(ops));
     memset(ops_args, 0, sizeof(ops_args));
-    D("seeding with %llu\n", i + w);
+    // D("seeding with %llu\n", i + w);
     srandom(i + w);
     make_ops_table(junk_len_mask);
+    // for (int j = 0; j <= op_free_idx; j++) {
+    //  // if (ops[j] >= 3) {
+    //  printf("%u.%u\n", ops[j], j & 1); //, op_to_str[ops[j]]);
+    //  //}
+    //}
+    // dump_ops_table();
+    dump_ops_table_as_stack(1);
+    printf("\n--\n");
+    continue;
     invert_ops();
-    dump_ops_table();
     srandom(i + w);
+    // junk_len_mask = (1 << 5) - 1; // XXX
     op_node_t *t0 =
         (op_node_t *)malloc(sizeof(op_node_t) * ((junk_len_mask << 1) + 3));
     op_node_t *tx = make_ops_tree(t0, junk_len_mask, BP);
-    assert(tx->op == OP_TARGET);
+    // dump_ops_tree_as_dot(t0 + 1, fdopen(42, "a")); // XXX
+    assert(tx->op == OPERAND_TARGET);
     // root at t[1]
     op_node_t *t = invert_ops_tree(t0, tx);
+    // dump_ops_tree_as_dot(t0 + 3, fdopen(43, "a")); // XXX
+    // exit(0);
     t = t0;
     for (int i = 0; i <= op_free_idx; i++) {
       // printf("%d op=%i left=%p right=%p pending=%u value=%x\n", i, t[i].op,
@@ -2908,6 +2969,7 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
     assert(!tap_fail);
     free(t);
   }
+  exit(0);
   TAP_PLAN;
   exit(0);
 

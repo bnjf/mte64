@@ -4,6 +4,7 @@ CFLAGS?=-g -DDEBUG \
 	-Wno-unused-function \
 	-Wno-unused-variable \
 	-Wno-unused-but-set-variable \
+	-Wimplicit-fallthrough \
 	-pedantic-errors \
 	-O -march=native
 LDFLAGS?=-lefence
@@ -19,5 +20,5 @@ headers:
 	makeheaders -v *.[ch]
 
 tags:
-	ctags *.c
+	ctags -R .
 
