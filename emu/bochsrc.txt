@@ -1,11 +1,12 @@
 
 plugin_ctrl: unmapped=true, biosdev=true, speaker=false, extfpuirq=false, parallel=true, serial=true, gameport=false, iodebug=true
 
-config_interface: wx
-display_library: wx
+#config_interface: wx
+#display_library: wx
+display_library: x
 
 cpu: count=1, ips=18000000
-memory: host=1, guest=1
+memory: host=2, guest=2
 romimage: file="$BXSHARE/BIOS-bochs-legacy"
 
 boot: disk, floppy
