@@ -86,6 +86,7 @@ payload_len equ $ - payload
 times 0x1ae-($-$$) db 0
 
 rnd_init:
+  ; XXX don't seed while testing
   ret
   push   dx
   push   cx
@@ -117,7 +118,7 @@ rnd_save:
   pop  dx
   ret
 
-; nasm hack: "org 210h"
+; nasm hack: "org 300h"
 times 0x210-($-$$) db 0
 
 mte_top:
