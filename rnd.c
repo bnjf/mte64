@@ -3,15 +3,13 @@
 
 #include "rnd.h"
 
-#define RAND_INV_RANGE(r) ((long int)((RAND_MAX + 1U) / (r)))
-
-long int rnd_n(int RANGE) {
-  long int x;
+long rnd_n(int n) {
+  long x, r;
   do {
     x = random();
-  } while (x >= RANGE * RAND_INV_RANGE(RANGE));
-  x /= RAND_INV_RANGE(RANGE);
-  return x;
+    r = x % n;
+  } while (x - r > (-n));
+  return r;
 }
 
 static uint16_t rnd_orig_x;
