@@ -82,9 +82,12 @@ next_file:
   mov   dx, fname
   int   0x21
 
-  mov   [rnd.c], 0
   mov   word [rnd.x], 1
   inc   word [$-2]
+  mov   word [rnd.c], 0
+  jnz   no_wrap
+  inc   word [$-4]
+no_wrap:
 
   ; zap work area first
   xor   di,di
