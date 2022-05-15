@@ -482,8 +482,8 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
     }
 
     // dump_ops_table();
-    DX = random();
-    AX = random();
+    DX = rnd();
+    AX = rnd();
 
     SI = BX = op_next_idx;
 
@@ -726,11 +726,11 @@ static void dump_ops_table() {
 #endif
   for (int i = 0; i < 0x21 && ops[i] != -1; i++) {
     printf("%5i%s", i,
-           op_idx == i
-               ? "^"
-               : op_next_idx == i
-                     ? "."
-                     : op_free_idx == i ? "+" : op_end_idx == i ? "$" : " ");
+           op_idx == i        ? "^"
+           : op_next_idx == i ? "."
+           : op_free_idx == i ? "+"
+           : op_end_idx == i  ? "$"
+                              : " ");
   }
   printf("\n");
   for (int i = 0; i < 0x21 && ops[i] != -1; i++) {
@@ -1447,7 +1447,7 @@ static void exec_enc_stage() {
         // BX == 1 here?
         while (DX) {
           D("trashing dx=%lx bytes\n", DX);
-          AX = random();
+          AX = rnd();
 #undef OP_JNZ_JUNK
 #ifdef OP_JNZ_JUNK
           *(uint8_t *)(SI++) = AL;
@@ -1498,7 +1498,7 @@ static void make_enc_and_dec() {
   DI = (uintptr_t)&reg_set_dec;
 
   // XXX moved this out of restart
-  // srandom();
+  // rnd_init();
 
   restart();
   return;
@@ -1509,8 +1509,8 @@ static void restart() {
   PUSH(BP);
   PUSH(BX);
 
-  // srandom(time(NULL));
-  // AX = random(); // dunno if upper bits are used
+  // rnd_init(time(NULL));
+  // AX = rnd(); // dunno if upper bits are used
 
   AL = -1;
   CX = 8;
@@ -1756,7 +1756,7 @@ static void g_code_from_ops() {
         } else {
           // @@do_end_of_loop
           // emit the store, doesn't matter if we MOV or XCHG
-          AX = random();
+          AX = rnd();
           AL = 0x87 + (AL & 2);
           // AL = 0x89;
           SWAP(AX, BX);
@@ -2012,7 +2012,7 @@ static void size_ok() {
     //
     //   mov bx,-size
     // l:mov ax,dword [ptr+caller_code+size]
-    //   xor ax,random
+    //   xor ax,val
     //   mov dword [ptr+target_stage+size],ax
     //   add bx,4
     //   jnz l
@@ -2210,7 +2210,7 @@ static void emit_ops() {
 
   // otherwise pick an available register {{{
   // emit_ops::@@pick_reg
-  AX = random();
+  AX = rnd();
   CX = 8; // 8 attempts
   do {
     emitb(DH | 0x50); // PUSH
@@ -2782,7 +2782,7 @@ static void mark_and_emit(uint8_t *p) {
   DI++;
 }
 static void pick_ptr_register(uint8_t *p) {
-  AX = random() & 3;
+  AX = rnd() & 3;
   if (AL == 0) {
     AL = 7;
   }
@@ -2793,7 +2793,7 @@ static void pick_ptr_register(uint8_t *p) {
 }
 static void ptr_and_r_sto() {
   pick_ptr_register(&ptr_reg);
-  AX = random() & 7;
+  AX = rnd() & 7;
   if (AL == 0) {
     // data reg = immediate
     mark_and_emit(&data_reg);
@@ -2927,7 +2927,7 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
     memset(ops, -1, sizeof(ops));
     memset(ops_args, 0, sizeof(ops_args));
     // D("seeding with %llu\n", i + w);
-    srandom(i + w);
+    rnd_init(i + w);
     make_ops_table(junk_len_mask);
     // for (int j = 0; j <= op_free_idx; j++) {
     //  // if (ops[j] >= 3) {
@@ -2939,7 +2939,7 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
     printf("\n--\n");
     continue;
     invert_ops();
-    srandom(i + w);
+    rnd_init(i + w);
     // junk_len_mask = (1 << 5) - 1; // XXX
     op_node_t *t0 =
         (op_node_t *)malloc(sizeof(op_node_t) * ((junk_len_mask << 1) + 3));
