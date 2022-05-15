@@ -11,8 +11,8 @@ clean:
 # generated files
 t_work.o: t_work.c
 t_work.c: work.bin.gz munge
-	zcat $< | ./munge > $@
+	zcat $< | ./munge $* > $@
 t_workinv.o: t_workinv.c
 t_workinv.c: workinv.bin.gz munge
-	zcat $< | ./munge > $@
+	zcat $< | ./munge $* > $@
 

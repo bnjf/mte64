@@ -16,9 +16,14 @@ int main(int argc, char *argv[]) {
   char buf[wsize];
   mut_work16_t *w;
 
+  if (argc < 2) {
+    exit(1);
+  }
+
   printf("#include <stdint.h>\n"
          "#include \"mut_work16.h\"\n"
-         "mut_work16_t t[] = {\n");
+         "mut_work16_t %s[] = {\n",
+         argv[1]);
   int i, rv;
   for (i = 0; (rv = read(0, &buf, wsize)) > 0;) {
     int c;

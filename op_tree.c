@@ -60,8 +60,8 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
 
   int count = 1;
   for (cur_op = cur_arg = &t[1]; cur_op <= cur_arg; cur_op++, count++) {
-    uint32_t r = random();
-    uint32_t pick = random() & junk_mask_len;
+    uint32_t r = rnd_orig();
+    uint32_t pick = rnd_orig() & junk_mask_len;
 
     // commit an odd argument for MUL
     if (cur_op->op == OP_MUL && !cur_op->pending) {
@@ -249,7 +249,7 @@ op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
     }
   }
 
-  D("new_root=%lu\n", new_root - root);
+  // D("new_root=%lu\n", new_root - root);
   return new_root;
 }
 
