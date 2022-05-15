@@ -1,6 +1,5 @@
 
-.POSIX:
-CPPFLAGS+=-I../../
+CPPFLAGS+=-I../../../
 CFLAGS?=-Wall
 
 all:	munge t_work.o t_workinv.o
