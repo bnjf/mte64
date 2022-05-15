@@ -3,11 +3,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "mut_work16.h"
 #include "op_tree.h"
 
 int main(int argc, char *argv[]) {
-  uint16_t x = 1, c = 0;
+  uint32_t x = 1;
   op_node_t *t, *t_x, *tinv, *tinv_x;
   const int NUM_TESTS = 100000;
 
@@ -17,10 +16,7 @@ int main(int argc, char *argv[]) {
 
     printf("\rtest %lu", t_workn - t_work);
 
-    rnd_orig_init(x++, c);
-    if (x == 0) {
-      ++c;
-    }
+    rnd_init(x++);
 
     op_node_t *const t0 = (op_node_t *)calloc(0x21, sizeof(op_node_t));
     t = t0;
