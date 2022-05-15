@@ -26,3 +26,4 @@ data/tree/t_work.o data/tree/t_workinv.o:
 
 clean:
 	rm -f *.[oh] op_tree data/tree/t_work.o data/tree/t_workinv.o rnd_mock.o ../op_tree.o ../integer_inverse.o
+	$(MAKE) -C data/tree clean
