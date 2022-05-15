@@ -82,7 +82,7 @@ next_file:
   mov   dx, fname
   int   0x21
 
-  mov   [rnd.c], cx ; zero
+  mov   [rnd.c], 0
   mov   word [rnd.x], 1
   inc   word [$-2]
 
