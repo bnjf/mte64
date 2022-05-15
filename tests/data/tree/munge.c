@@ -16,6 +16,8 @@ int main(int argc, char *argv[]) {
   char buf[wsize];
   mut_work16_t *w;
 
+  assert(sizeof(mut_work16_t) == 1369);
+
   if (argc < 2) {
     exit(1);
   }

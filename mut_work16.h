@@ -1,6 +1,6 @@
 
-#if INTERFACE
-struct mut_work16_t {
+typedef struct mut_work16_t mut_work16_t;
+struct __attribute__((packed, aligned(1))) mut_work16_t {
   uint8_t ops[0x21];
   uint16_t ops_args[0x21];
   uint16_t jnz_patch_dec[0x21];
@@ -30,4 +30,3 @@ struct mut_work16_t {
   uint8_t dec_stage[0x200];
   uint8_t enc_stage[0x200];
 };
-#endif

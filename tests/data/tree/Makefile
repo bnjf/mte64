@@ -1,11 +1,11 @@
 
 CPPFLAGS+=-I../../../
-CFLAGS?=-Wall
+CFLAGS?=-O -Wall
 
 all:	munge t_work.o t_workinv.o
 munge:	munge.c
 clean:
-	rm -f t_work.c t_work.o t_workinv.c t_workinv.o munge
+	@rm -f t_work.c t_work.o t_workinv.c t_workinv.o munge
 
 # generated files
 t_work.o: t_work.c
