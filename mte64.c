@@ -10,7 +10,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "c-tap-test/c-tap-test.h"
 #include "mte64.h"
 
 // public stuff {{{
@@ -2917,76 +2916,6 @@ static void encrypt_target() {
 }
 
 mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
-  junk_len_mask = (1 << 4) - 1;
-  BP = 1;
-  // long long w = time(NULL);
-  long long w = 0;
-  unsigned int i = 10000;
-  while (i--) {
-    BP = ~BP; // flip
-    memset(ops, -1, sizeof(ops));
-    memset(ops_args, 0, sizeof(ops_args));
-    // D("seeding with %llu\n", i + w);
-    rnd_init(i + w);
-    make_ops_table(junk_len_mask);
-    // for (int j = 0; j <= op_free_idx; j++) {
-    //  // if (ops[j] >= 3) {
-    //  printf("%u.%u\n", ops[j], j & 1); //, op_to_str[ops[j]]);
-    //  //}
-    //}
-    // dump_ops_table();
-    dump_ops_table_as_stack(1);
-    printf("\n--\n");
-    continue;
-    invert_ops();
-    rnd_init(i + w);
-    // junk_len_mask = (1 << 5) - 1; // XXX
-    op_node_t *t0 =
-        (op_node_t *)malloc(sizeof(op_node_t) * ((junk_len_mask << 1) + 3));
-    op_node_t *tx = make_ops_tree(t0, junk_len_mask, BP);
-    // dump_ops_tree_as_dot(t0 + 1, fdopen(42, "a")); // XXX
-    assert(tx->op == OPERAND_TARGET);
-    // root at t[1]
-    op_node_t *t = invert_ops_tree(t0, tx);
-    // dump_ops_tree_as_dot(t0 + 3, fdopen(43, "a")); // XXX
-    // exit(0);
-    t = t0;
-    for (int i = 0; i <= op_free_idx; i++) {
-      // printf("%d op=%i left=%p right=%p pending=%u value=%x\n", i, t[i].op,
-      //        t[i].left, t[i].right, t[i].pending, t[i].value);
-      TAP_TEST_MSG(ops[i] == (t[i].pending * 0x80) + t[i].op,
-                   "op @%u: op=%u (%s) pending=%u (should be: %u (%s))", i,
-                   t[i].op, op_to_str[t[i].op], t[i].pending, ops[i],
-                   op_to_str[ops[i]]);
-      if (ops[i] < 3) {
-        TAP_TEST_MSG(ops_args[i] == t[i].value, "%s %x <> %x",
-                     op_to_str[ops[i]], ops_args[i], t[i].value);
-      } else {
-        TAP_TEST(&t[_get_op_arg(i * 2)] == t[i].left);
-        TAP_TEST(&t[_get_op_arg(i * 2 + 1)] == t[i].right);
-      }
-    }
-    assert(!tap_fail);
-    free(t);
-  }
-  exit(0);
-  TAP_PLAN;
-  exit(0);
-
-  /* int ref[3] = {0}; */
-  /* for (int i = 0; i < 0x21 && ops[i] != -1; i++) { */
-  /*   if (ops[i] < 3) ref[ops[i]]++; */
-  /* } */
-  /* printf("%d\n", ref[1]); */
-  // dump_ops_tree_as_dot();
-  // tree_to_infix(op_idx);
-  printf("\n\n");
-  invert_ops();
-  // dump_ops_tree_as_dot();
-  // tree_to_infix(op_idx);
-  // printf("\n");
-  exit(0);
-
   // in = f_in;
   // out = f_out;
   stackp = stack + STACK_SIZE - 1;

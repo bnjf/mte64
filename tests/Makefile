@@ -10,7 +10,7 @@ CFLAGS?=-g -DDEBUG \
 LDFLAGS?=-lefence
 CPPFLAGS+=-I../ 
 
-op_tree: op_tree.o data/tree/t_work.o data/tree/t_workinv.o rnd_mock.o ../op_tree.o ../integer_inverse.o
+op_tree: op_tree.o data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
 op_tree.o: op_tree.c op_tree.h
 op_tree.h: op_tree.c data/tree/t_work.c data/tree/t_workinv.c ../*.c
 	makeheaders $^
@@ -25,5 +25,5 @@ data/tree/t_work.o data/tree/t_workinv.o:
 	$(MAKE) -C ../ $(notdir $@)
 
 clean:
-	@rm -f *.[oh] op_tree data/tree/t_work.o data/tree/t_workinv.o rnd_mock.o ../op_tree.o ../integer_inverse.o
+	$(RM) -f op_tree data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
 	$(MAKE) -C data/tree clean

@@ -1,6 +1,12 @@
 
+// this is *not* automatically generated due to makeheaders(1) barfing on
+// attributes.  this struct must be packed to match the original
+// implementation, and is 1369 bytes in length.
+
+#ifndef MUT_WORK16_H
+#define MUT_WORK16_H
 typedef struct mut_work16_t mut_work16_t;
-struct __attribute__((packed, aligned(1))) mut_work16_t {
+struct __attribute__((__packed__)) mut_work16_t {
   uint8_t ops[0x21];
   uint16_t ops_args[0x21];
   uint16_t jnz_patch_dec[0x21];
@@ -30,3 +36,4 @@ struct __attribute__((packed, aligned(1))) mut_work16_t {
   uint8_t dec_stage[0x200];
   uint8_t enc_stage[0x200];
 };
+#endif
