@@ -17,13 +17,14 @@ op_tree.h: op_tree.c data/tree/t_work.c data/tree/t_workinv.c ../*.c
 	touch op_tree.h
 
 data/tree/t_work.c data/tree/t_workinv.c:
-	@echo manually run make in data/tree
-	@false
+	$(error ... make the target ``testdata'' first)
+testdata: data/tree/t_work.o data/tree/t_workinv.o
+
 data/tree/t_work.o data/tree/t_workinv.o:
 	$(MAKE) -C data/tree $(notdir $@)
 ../op_tree.o ../integer_inverse.o:
 	$(MAKE) -C ../ $(notdir $@)
 
 clean:
-	$(RM) -f op_tree data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
 	$(MAKE) -C data/tree clean
+	$(RM) op_tree op_tree.h op_tree.o data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
