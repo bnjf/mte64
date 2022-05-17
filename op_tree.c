@@ -58,7 +58,7 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
   // current root
   t[1] = (op_node_t){.op = OPERAND_TARGET, .pending = 1};
 
-  int count = 1;
+  int count = 1; // nodes in the tree
   for (cur_op = cur_arg = &t[1]; cur_op <= cur_arg; cur_op++, count++) {
     uint32_t r = rnd();
     uint32_t pick = rnd() & junk_mask_len;
@@ -101,7 +101,6 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
 
       // we can use the pointer reg as the argument when we're
       // creating the loop
-      int pending_mul = (cur_op->op == OP_MUL && cur_op->pending);
       int is_right = ((count + pending_mul) % 2) == 1;
       int is_val_zero = (r & 0xff) == 0;
       op_t previous_op = (cur_op - 1)->op;
