@@ -9,39 +9,25 @@
 struct op_node_t {
   op_t op;
   int pending;
-  uint32_t value;
+  uint32_t operand;
   op_node_t *left;
   op_node_t *right;
 };
 #endif
 
-#define SWAP(x, y)                                                           \
-  do {                                                                       \
-    typeof(x) SWAP = x;                                                      \
-    x = y;                                                                   \
-    y = SWAP;                                                                \
-  } while (0)
-#ifndef NDEBUG
-#define D(...)                                                               \
-  do {                                                                       \
-    fprintf(stderr, "[%s:%s L%u] ", __FILE__, __func__, __LINE__);           \
-    fprintf(stderr, __VA_ARGS__);                                            \
-  } while (0)
-#endif
-
-// returns the node with OP_TARGET
-static op_t save_op_arg(op_node_t *cur_op, op_t val_type, uint32_t v) {
+// returns the operand type
+static op_t save_operand(op_node_t *cur_op, op_t operand_type, uint32_t v) {
   if (cur_op->pending) {
-    val_type = OPERAND_TARGET;
+    operand_type = OPERAND_TARGET;
   }
-  cur_op->op = val_type;
+  cur_op->op = operand_type;
   cur_op->pending = 0;
-  cur_op->value = v;
-  return val_type;
+  cur_op->operand = v;
+  return operand_type;
 }
 
-// phase == 0 or not 0
-op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
+// if phase is 0, we're creating the memory load/stores
+op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
                          int phase) {
 
   op_node_t *cur_op;
@@ -49,7 +35,7 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
   op_node_t *target_loc = NULL; // where we've inserted `x`
 
   // mask must be 2^n-1
-  if (((junk_mask_len + 1) & junk_mask_len) != 0) {
+  if (((junk_mask + 1) & junk_mask) != 0) {
     return NULL;
   }
 
@@ -61,11 +47,11 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
   int count = 1; // nodes in the tree
   for (cur_op = cur_arg = &t[1]; cur_op <= cur_arg; cur_op++, count++) {
     uint32_t r = rnd();
-    uint32_t pick = rnd() & junk_mask_len;
+    uint32_t pick = rnd() & junk_mask;
 
     // commit an odd argument for MUL
     if (cur_op->op == OP_MUL && !cur_op->pending) {
-      if (save_op_arg(cur_op, OPERAND_IMM, r | 1) == OPERAND_TARGET) {
+      if (save_operand(cur_op, OPERAND_IMM, r | 1) == OPERAND_TARGET) {
         target_loc = cur_op;
       }
       continue;
@@ -74,7 +60,7 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
     int pending_mul = (cur_op->op == OP_MUL && cur_op->pending);
     /* bump count by 1 if there's a MUL waiting for a load */
     if (pick < (count + pending_mul)) {
-      op_t val_type = OPERAND_IMM;
+      op_t operand_type = OPERAND_IMM;
 
       /**
         ```asm
@@ -108,7 +94,7 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
       if (is_val_zero ||
           (is_right && (previous_op == OPERAND_IMM || pending_mul))) {
         if (phase == 0) {
-          val_type = OPERAND_PTR; // can use ptr
+          operand_type = OPERAND_PTR; // can use ptr
         } else {
           // this serves two purposes:
           // - avoiding the lower byte being 0 (sentinel for reg move)
@@ -116,7 +102,7 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask_len,
           r |= 1;
         }
       }
-      if (save_op_arg(cur_op, val_type, r) == OPERAND_TARGET) {
+      if (save_operand(cur_op, operand_type, r) == OPERAND_TARGET) {
         target_loc = cur_op;
       }
     } else {
@@ -172,21 +158,25 @@ int is_operand(const op_node_t *const n) {
 // find (don't descend!)
 op_node_t *get_parent(op_node_t *const cur, op_node_t *const n) {
   op_node_t *t;
-  if (cur == n) {
+
+  // done: descended to ourself, or an operand
+  if (cur == n || cur->op < 3) {
     return NULL;
   }
-  if (cur->op < 3) {
-    return NULL;
-  }
+
+  // if n is a child of cur, return
   if (cur->left == n || cur->right == n) {
     return cur;
   }
+
+  // otherwise ascend
   if ((t = get_parent(cur->left, n)) != NULL) {
     return t;
   }
   if ((t = get_parent(cur->right, n)) != NULL) {
     return t;
   }
+
   return NULL;
 }
 
@@ -195,17 +185,12 @@ op_node_t *get_parent(op_node_t *const cur, op_node_t *const n) {
 op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
   op_node_t *child;
   op_node_t *cur;
-  op_node_t *new_root;
+  op_node_t *x_op;
   op_node_t *parent;
 
-  for (
-      // new_root is our return value
-      (new_root = cur = get_parent(root + 1, n)), child = n;
-      // until we find no more parents
-      cur != NULL && cur != &root[0];
-      // ascend
-      child = cur,
-                                                  cur = parent) {
+  // walk from the current x upward
+  for ((x_op = cur = get_parent(root + 1, n)), child = n;
+       cur != NULL && cur != &root[0]; child = cur, cur = parent) {
 
     // if we reach the root, put our `x` back in
     if ((parent = get_parent(root + 1, cur)) == NULL) {
@@ -214,21 +199,16 @@ op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
 
     switch (cur->op) {
     case OP_MUL:
-      // mul x,y => mul x*y^{-1}
-      cur->right->value = integer_inverse(cur->right->value);
+      cur->right->operand = integer_inverse(cur->right->operand);
       break;
     case OP_SUB:
-      // sub is left associative
-      if (cur->left == child) {
+      if (cur->left == child)
         cur->op = OP_ADD;
-      }
       break;
     case OP_ADD:
-      // add -> sub, but ensure we're on the left
       cur->op = OP_SUB;
-      if (cur->right == child) {
+      if (cur->right == child)
         SWAP(cur->left, cur->right);
-      }
       break;
     case OP_ROL:
       cur->op = OP_ROR;
@@ -248,8 +228,39 @@ op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
     }
   }
 
-  // D("new_root=%lu\n", new_root - root);
-  return new_root;
+  return x_op;
+}
+
+// given x's parent
+int adjust_ptr_operand(op_node_t *parent) {
+  uint32_t adj;
+  int done = 0;
+
+  if (parent->op != OP_ADD && parent->op != OP_SUB) {
+    return 0;
+  }
+
+  // nb. lower byte zero is a special operand, don't adjust
+  adj = (parent->op == OP_ADD) ? 4 : -4;
+  if (parent->right->op == OPERAND_IMM) {
+    adj += parent->right->operand;
+    if ((adj & 0xff) != 0) {
+      parent->right->operand = adj;
+      done--;
+    }
+  }
+  // XXX immediate operand on the left => sub?
+  adj = 4;
+  if (parent->left->op == OPERAND_IMM) {
+    assert(parent->op == OP_SUB);
+    adj += parent->left->operand;
+    if ((adj & 0xff) != 0) {
+      parent->left->operand = adj;
+      done--;
+    }
+  }
+
+  return done;
 }
 
 // vim:set commentstring=//\ %s:

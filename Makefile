@@ -12,7 +12,7 @@ LDFLAGS?=-lefence
 all: tags headers demo
 
 clean:
-	rm -f *.[oh] tags demo
+	rm -f *.o tags demo
 
 demo: mte64.o demo.o op_tree.o rnd.o integer_inverse.o
 

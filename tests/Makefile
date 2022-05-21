@@ -10,11 +10,11 @@ CFLAGS?=-g -DDEBUG \
 LDFLAGS?=-lefence
 CPPFLAGS+=-I../ 
 
-op_tree: op_tree.o data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
-op_tree.o: op_tree.c op_tree.h
-op_tree.h: op_tree.c data/tree/t_work.c data/tree/t_workinv.c ../*.c
+compare_original_trees: compare_original_trees.o data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
+compare_original_trees.o: compare_original_trees.c compare_original_trees.h
+compare_original_trees.h: compare_original_trees.c data/tree/t_work.c data/tree/t_workinv.c ../*.c ../common.h
 	makeheaders $^
-	touch op_tree.h
+	touch compare_original_trees.h
 
 data/tree/t_work.c data/tree/t_workinv.c:
 	$(error ... make the target ``testdata'' first)
@@ -27,4 +27,4 @@ data/tree/t_work.o data/tree/t_workinv.o:
 
 clean:
 	$(MAKE) -C data/tree clean
-	$(RM) op_tree op_tree.h op_tree.o data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
+	$(RM) compare_original_trees compare_original_trees.h compare_original_trees.o data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../compare_original_trees.o ../integer_inverse.o

@@ -71,25 +71,6 @@ struct mut_output {
 #endif
 // }}}
 
-// macros {{{
-#define SWAP(x, y)                                                           \
-  do {                                                                       \
-    typeof(x) SWAP = x;                                                      \
-    x = y;                                                                   \
-    y = SWAP;                                                                \
-  } while (0)
-
-#if !DEBUG
-#define D(...)
-#else
-#define D(...)                                                               \
-  do {                                                                       \
-    fprintf(stderr, "[%s L%u] ", __func__, __LINE__);                        \
-    fprintf(stderr, __VA_ARGS__);                                            \
-  } while (0)
-#endif
-// }}}
-
 // enums {{{
 #if INTERFACE
 enum op_t {
@@ -480,7 +461,6 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       return;
     }
 
-    // dump_ops_table();
     DX = rnd();
     AX = rnd();
 
@@ -550,9 +530,6 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       // `AAM 12`.  let's rand in range.
       //
       // AL = rnd_n(12);
-      if ((AL = rnd_n(3)) == 2) {
-        AL++;
-      }
 
       CH = CH & 0x80;
       if (CH != 0) {
@@ -698,7 +675,7 @@ static void dump_ops_tree_as_dot(op_node_t *t, FILE *f) {
               op_to_str[t->op]);
     } else {
       fprintf(f, "%c_%p [label=\"%u\"];\n", 'a' + node_id, (void *)t,
-              t->value);
+              t->operand);
     }
   } else {
     fprintf(f, "%c_%p [label=\"%s\"]; ",
@@ -886,7 +863,7 @@ static void get_op_loc() {
 }
 
 static void invert_ops() {
-  D("starting at idx=%u\n", op_end_idx);
+  // D("starting at idx=%u\n", op_end_idx);
 
   AL = op_end_idx;
   assert(AL < 0x21);
@@ -895,7 +872,7 @@ static void invert_ops() {
 
   get_op_loc();
   if (cpu_state.c) {
-    D("couldn't find a dependent of op_end_idx=%x, returning!\n", AL);
+    // D("couldn't find a dependent of op_end_idx=%x, returning!\n", AL);
     return;
   }
   op_idx = AL;
@@ -2919,6 +2896,19 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
   // in = f_in;
   // out = f_out;
   stackp = stack + STACK_SIZE - 1;
+
+  // XXX testing {{{
+  BP = 0;
+  junk_len_mask = 0xf;
+  do {
+    printf("foo\n");
+    make_ops_table(0xf);
+    dump_ops_table(op_idx, 1);
+    invert_ops();
+    try_ptr_advance();
+  } while (CX == 0);
+  exit(0);
+  // }}}
 
   // PUSH((uintptr_t)f_in->code / 16); // let's pretend it's a segment
   PUSH(0);

@@ -4,7 +4,8 @@
 #include <stdlib.h>
 
 #include "mut_work16.h"
-#include "op_tree.h"
+
+#include "compare_original_trees.h"
 
 int main(int argc, char *argv[]) {
   uint32_t x = 1;
@@ -26,11 +27,11 @@ int main(int argc, char *argv[]) {
       assert(t[i].op == t_workn->ops[i]);
       if (t_workn->ops[i] < 3) {
         // check operand
-        if (!(t[i].value % 0x10000 == t_workn->ops_args[i])) {
-          printf("\nop:%u arg:%u expected_arg:%u\n", t[i].op, t[i].value,
+        if (!(t[i].operand % 0x10000 == t_workn->ops_args[i])) {
+          printf("\nop:%u arg:%u expected_arg:%u\n", t[i].op, t[i].operand,
                  t_workn->ops_args[i]);
         }
-        assert(t[i].value % 0x10000 == t_workn->ops_args[i]);
+        assert(t[i].operand % 0x10000 == t_workn->ops_args[i]);
       } else {
         // check op l/r
         assert(t[i].left->op == t_workn->ops[t_workn->ops_args[i] & 0xff]);
@@ -45,11 +46,11 @@ int main(int argc, char *argv[]) {
       assert(t[i].op == t_workinvn->ops[i]);
       if (t_workinvn->ops[i] < 3) {
         // check operand
-        if (!(t[i].value % 0x10000 == t_workinvn->ops_args[i])) {
-          printf("\nop:%u arg:%u expected_arg:%u\n", t[i].op, t[i].value,
+        if (!(t[i].operand % 0x10000 == t_workinvn->ops_args[i])) {
+          printf("\nop:%u arg:%u expected_arg:%u\n", t[i].op, t[i].operand,
                  t_workinvn->ops_args[i]);
         }
-        assert(t[i].value % 0x10000 == t_workinvn->ops_args[i]);
+        assert(t[i].operand % 0x10000 == t_workinvn->ops_args[i]);
       } else {
         // check op l/r
         assert(t[i].left->op ==
@@ -58,6 +59,7 @@ int main(int argc, char *argv[]) {
                t_workinvn->ops[(t_workinvn->ops_args[i] >> 8) & 0xff]);
       }
     }
+    assert(adjust_ptr_operand(t_x) == 0);
     free(t0);
   }
   printf("\nok\n");

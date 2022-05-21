@@ -5,6 +5,7 @@
 !.clang-format
 !.gdbinit
 !tests/mut_work16.h
+!common.h
 scratch/
 tags
 demo
