@@ -36,14 +36,21 @@ void print_ops_tree_as_expression(const op_node_t *t,
     switch (parent->op) {
     case OP_ROL:
     case OP_ROR:
-      printf("%u", t->operand & 0x1f);
+    case OP_SHL:
+    case OP_SHR:
+      if (parent->right == t) {
+        printf("%u", t->operand & 0x1f);
+      } else {
+        printf("%u", t->operand);
+      }
       return;
     default:
-      printf("%u", t->operand);
+      printf("%u", t->operand & 0xffff);
       return;
     }
   case OPERAND_TARGET:
-    printf("x=%u", t->operand);
+    // printf("x=%u", t->operand);
+    printf("x");
     return;
   case OPERAND_PTR:
     printf("p");
@@ -75,8 +82,8 @@ void print_ops_tree(const op_node_t *t, const int d) {
 
 int main(int argc, char *argv[]) {
 
-  if (argc < 4) {
-    fprintf(stderr, "Usage: %s seed junk phase\n", argv[0]);
+  if (argc < 5) {
+    fprintf(stderr, "Usage: %s seed junk phase adjust\n", argv[0]);
     exit(1);
   }
 
@@ -87,6 +94,7 @@ int main(int argc, char *argv[]) {
   const int JUNK_FLAG = ((1 << JUNK_NUM) - 1);
   const int NODES = 2 + (JUNK_FLAG * 2);
   const int PHASE = atoi(argv[3]);
+  const int ADJUST = atoi(argv[4]);
 
   rnd_init(SEED);
 
@@ -114,11 +122,12 @@ int main(int argc, char *argv[]) {
     exit(0);
   }
 
-  if (adjust_ptr_operand(tinv_x)) {
+  if (ADJUST && adjust_ptr_operand(tinv_x)) {
     printf("-- dec (adjusted)\n");
   } else {
     printf("-- dec\n");
   }
+  // print_ops_tree_as_expression(t0 + 1, NULL);
   print_ops_tree_as_expression(tinv_x, NULL);
   printf("\n");
 
