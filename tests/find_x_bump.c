@@ -4,8 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "mut_work16.h"
-
 #include "find_x_bump.h"
 
 static const char *const op_to_str[] = {
@@ -32,6 +30,12 @@ void print_ops_tree(const op_node_t *t, const int d) {
 }
 
 int main(int argc, char *argv[]) {
+
+  if (argc < 4) {
+    fprintf(stderr, "Usage: %s iterations junk_switch 0\n", argv[0]);
+    exit(1);
+  }
+
   uint32_t x = 1;
   op_node_t *t, *t_x, *tinv, *tinv_x;
   const int NUM_TESTS = atoi(argv[1]);
@@ -46,11 +50,12 @@ int main(int argc, char *argv[]) {
 
     op_node_t *const t0 = (op_node_t *)calloc(NODES, sizeof(op_node_t));
 
-    t_x = make_ops_tree(t0, JUNK_FLAG, 0);
+    t_x = make_ops_tree(t0, JUNK_FLAG, -1);
     tinv_x = invert_ops_tree(t0, t_x);
 
     // empty
     if (tinv_x == NULL) {
+      printf("null\n");
       free(t0);
       continue;
     }

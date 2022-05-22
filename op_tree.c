@@ -46,8 +46,8 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
 
   int count = 1; // nodes in the tree
   for (cur_op = cur_arg = &t[1]; cur_op <= cur_arg; cur_op++, count++) {
-    uint32_t r = rnd();
-    uint32_t pick = rnd() & junk_mask;
+    uint32_t r = rnd_get();
+    uint32_t pick = rnd_get() & junk_mask;
 
     // commit an odd argument for MUL
     if (cur_op->op == OP_MUL && !cur_op->pending) {
@@ -108,14 +108,15 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
     } else {
       op_t new_op;
 
-      if (cur_op->pending) {
-        new_op = (op_t[]){OP_SUB, OP_ADD, OP_XOR, OP_MUL, OP_ROL, OP_ROR}
-            [((uint8_t)r % 12) >> 1];
-      } else {
-        new_op = (op_t[]){
-            OP_SUB, OP_ADD, OP_XOR, OP_MUL, OP_ROL,  OP_ROR,
-            OP_SHL, OP_SHR, OP_OR,  OP_AND, OP_IMUL, OP_JNZ}[(uint8_t)r % 12];
+#ifndef ALLOW_BIAS
+      // 16 = next pow 2
+      while (r > -(16 % 12)) {
+        r = rnd_get();
       }
+#endif
+      new_op = (op_t[]){OP_SUB, OP_ADD, OP_XOR, OP_MUL, OP_ROL,  OP_ROR,
+                        OP_SHL, OP_SHR, OP_OR,  OP_AND, OP_IMUL, OP_JNZ}
+          [((uint8_t)r % 12) >> !!cur_op->pending];
 
       // allocate our two arguments
       cur_op->left = ++cur_arg;
