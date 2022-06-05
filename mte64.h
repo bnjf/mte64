@@ -114,15 +114,16 @@ enum op_t {
   OP_JNZ
 };
 typedef enum op_t op_t;
-enum reg_set_t { REG_SET_BUSY = 0, REG_SET_FREE = 0xff };
+enum reg_set_t { REG_SET_BUSY = 0,
+  REG_SET_FREE = 0xff };
 typedef enum reg_set_t reg_set_t;
 #define LOCAL_INTERFACE 0
 struct mut_output {
-  uint8_t *code;              // ds:DX
+  uint8_t* code;              // ds:DX
   unsigned int len;           // CX
   unsigned int decrypted_len; // AX
-  uint8_t *routine_end;       // DI
-  uint8_t *loop_start;        // SI
+  uint8_t* routine_end;       // DI
+  uint8_t* loop_start;        // SI
 };
 enum mut_flags_t {
   MUT_FLAGS_PRESERVE_AX = 0x001,
@@ -147,7 +148,7 @@ enum mut_routine_size_t {
 };
 typedef enum mut_routine_size_t mut_routine_size_t;
 struct mut_input {
-  uint8_t *code;            // ds:DX
+  uint8_t* code;            // ds:DX
   unsigned int len;         // CX
   uintptr_t exec_offset;    // BP
   uintptr_t entry_offset;   // DI
