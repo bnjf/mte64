@@ -3,7 +3,11 @@
 
 #include "rnd.h"
 
-uint32_t rnd_n(uint32_t n) {
+void rnd_init(uint32_t x) { srandom(x); }
+
+uint32_t rnd_get() { return random(); }
+
+uint32_t rnd_range(uint32_t n) {
   uint32_t x, r;
   do {
     x = rnd();
@@ -11,6 +15,3 @@ uint32_t rnd_n(uint32_t n) {
   } while (x - r > (-n));
   return r;
 }
-
-void rnd_init(uint32_t x) { srandom(x); }
-uint32_t rnd() { return random(); }

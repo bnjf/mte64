@@ -6,6 +6,13 @@
 static uint16_t rnd_x;
 static uint16_t rnd_c;
 
+long rnd_get() {
+  uint32_t t = 0xfea0UL * rnd_x + rnd_c;
+  rnd_x = t & 0xffff;
+  rnd_c = t >> 16;
+  return rnd_x;
+}
+
 long rnd_range(const int n) {
   uint16_t x, r;
   do {
@@ -18,11 +25,4 @@ long rnd_range(const int n) {
 void rnd_init(const uint32_t x) {
   rnd_x = x & 0xffff;
   rnd_c = x >> 16;
-}
-
-long rnd_get() {
-  uint32_t t = 0xfea0UL * rnd_x + rnd_c;
-  rnd_x = t & 0xffff;
-  rnd_c = t >> 16;
-  return rnd_x;
 }

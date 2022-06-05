@@ -1,15 +1,24 @@
-
 digraph mte {
-    ordering=out;
+    //node [shape=box];
+    node [
+        margin=0.1
+        fontcolor=black 
+        fontsize=20 
+        height=0
+        width=0 
+        shape=box 
+        style=rounded]
+
+    //ordering=in;
+    //ordering=out;
     splines=true;
-    
     
     mut_engine -> {make_enc_and_dec encrypt_target}
     
-    make_enc_and_dec -> {rnd_init exec_enc_stage g_code invert_ops}
-    encrypt_target -> {exec_enc_stage rnd_get}
+    make_enc_and_dec -> {exec_enc_stage g_code invert_ops}
+    encrypt_target -> {exec_enc_stage}
     
-    make_ops_table -> {rnd_get}
+    make_ops_table 
     
     encode_mrm -> {encode_op_mrm bl_op_reg_mrm}
     encode_mrm_ptr -> encode_op_mrm
@@ -27,7 +36,7 @@ digraph mte {
     g_code -> {make_ops_table g_code_from_ops}
     
     g_code_from_ops -> {get_op_args ptr_and_r_sto emit_mov emit_ops 
-      rnd_get encode_mrm_ptr invert_ops try_ptr_advance g_code_from_ops
+      encode_mrm_ptr invert_ops try_ptr_advance g_code_from_ops
       emit_mov g_code rnd_get}
     
     try_ptr_advance
@@ -36,11 +45,15 @@ digraph mte {
     
     ptr_and_r_sto -> rnd_get
     
-    emit_ops -> {emit_ops emit_mov_data bl_op_reg_mrm rnd_get emit_mov
+    emit_ops -> {emit_ops emit_mov_data bl_op_reg_mrm emit_mov
       emit_ops emit_mov_data encode_mrm emit_op_mrm bl_op_reg_mrm}
       
     emit_mov_data -> emit_mov
     
     emit_mov -> encode_mrm_dh_s
-    
+
+    rnd_get 
+    {make_ops_table encrypt_target g_code_from_ops emit_ops} -> rnd_get
+    rnd_init
+    make_enc_and_dec -> rnd_init
 }

@@ -9,7 +9,8 @@
 
 int main(int argc, char *argv[]) {
   uint32_t x = 1;
-  op_node_t *t, *t_x, *tinv, *tinv_x;
+  op_node_t *t, *tinv;
+  uint8_t t_x, tinv_x;
   const int NUM_TESTS = 100000;
 
   mut_work16_t *t_workn, *t_workinvn;
@@ -34,8 +35,8 @@ int main(int argc, char *argv[]) {
         assert(t[i].operand % 0x10000 == t_workn->ops_args[i]);
       } else {
         // check op l/r
-        assert(t[i].left->op == t_workn->ops[t_workn->ops_args[i] & 0xff]);
-        assert(t[i].right->op ==
+        assert(t[t[i].left].op == t_workn->ops[t_workn->ops_args[i] & 0xff]);
+        assert(t[t[i].right].op ==
                t_workn->ops[(t_workn->ops_args[i] >> 8) & 0xff]);
       }
     }
@@ -53,13 +54,13 @@ int main(int argc, char *argv[]) {
         assert(t[i].operand % 0x10000 == t_workinvn->ops_args[i]);
       } else {
         // check op l/r
-        assert(t[i].left->op ==
+        assert(t[t[i].left].op ==
                t_workinvn->ops[t_workinvn->ops_args[i] & 0xff]);
-        assert(t[i].right->op ==
+        assert(t[t[i].right].op ==
                t_workinvn->ops[(t_workinvn->ops_args[i] >> 8) & 0xff]);
       }
     }
-    assert(adjust_ptr_operand(t_x) == 0);
+    assert(adjust_ptr_operand(t, t_x) == 0);
     free(t0);
   }
   printf("\nok\n");

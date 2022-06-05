@@ -12,7 +12,7 @@ CPPFLAGS+=-I../
 
 compare_original_trees: compare_original_trees.o data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
 compare_original_trees.o: compare_original_trees.c compare_original_trees.h
-compare_original_trees.h: compare_original_trees.c data/tree/t_work.c data/tree/t_workinv.c ../*.c ../common.h
+compare_original_trees.h: compare_original_trees.c data/tree/t_work.c data/tree/t_workinv.c ../*.c ../common.h mock/rnd.h
 	makeheaders $^
 	touch compare_original_trees.h
 
@@ -25,6 +25,10 @@ find_x_bump.h: find_x_bump.c ../op_tree.c ../integer_inverse.c mock/rnd.c ../mte
 print_ops: print_ops.o ../op_tree.o ../integer_inverse.o mock/rnd.o
 print_ops.o: print_ops.c print_ops.h
 print_ops.h: print_ops.c ../op_tree.c ../integer_inverse.c mock/rnd.c ../mte64.c ../common.h
+	makeheaders $^
+	touch $@
+
+mock/rnd.h: mock/rnd.c
 	makeheaders $^
 	touch $@
 

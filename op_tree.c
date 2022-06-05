@@ -8,56 +8,60 @@
 #if INTERFACE
 struct op_node_t {
   op_t op;
-  int pending;
-  uint32_t operand;
-  op_node_t *left;
-  op_node_t *right;
+  unsigned x_path : 1;
+  union {
+    uint32_t operand;
+    struct {
+      uint8_t left;
+      uint8_t right;
+    };
+  };
 };
 #endif
 
 // returns the operand type
-static op_t save_operand(op_node_t *cur_op, op_t operand_type, uint32_t v) {
-  if (cur_op->pending) {
+static op_t save_operand(op_node_t *t, int i, op_t operand_type, uint32_t v) {
+  op_node_t *cur_op = t + i;
+  if (cur_op->x_path) {
     operand_type = OPERAND_TARGET;
   }
   cur_op->op = operand_type;
-  cur_op->pending = 0;
+  cur_op->x_path = 0;
   cur_op->operand = v;
   return operand_type;
 }
 
 // if phase is 0, we're creating the memory load/stores
-op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
-                         int phase) {
+uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
 
-  op_node_t *cur_op;
-  op_node_t *cur_arg;
-  op_node_t *target_loc = NULL; // where we've inserted `x`
+  int i;     // operator
+  int j;     // operand
+  int x = 0; // where we've inserted `x`
 
   // mask must be 2^n-1
   if (((junk_mask + 1) & junk_mask) != 0) {
-    return NULL;
+    abort();
   }
 
   // init root for when we invert
-  t[0] = (op_node_t){.op = OPERAND_TARGET, .pending = 0};
+  t[0] = (op_node_t){.op = OPERAND_TARGET, .x_path = 0};
   // current root
-  t[1] = (op_node_t){.op = OPERAND_TARGET, .pending = 1};
+  t[1] = (op_node_t){.op = OPERAND_TARGET, .x_path = 1};
 
   int count = 1; // nodes in the tree
-  for (cur_op = cur_arg = &t[1]; cur_op <= cur_arg; cur_op++, count++) {
+  for (i = j = 1; i <= j; i++) {
     uint32_t r = rnd_get();
     uint32_t pick = rnd_get() & junk_mask;
 
     // commit an odd argument for MUL
-    if (cur_op->op == OP_MUL && !cur_op->pending) {
-      if (save_operand(cur_op, OPERAND_IMM, r | 1) == OPERAND_TARGET) {
-        target_loc = cur_op;
+    if (t[i].op == OP_MUL && !t[i].x_path) {
+      if (save_operand(t, i, OPERAND_IMM, r | 1) == OPERAND_TARGET) {
+        x = i;
       }
       continue;
     }
 
-    int pending_mul = (cur_op->op == OP_MUL && cur_op->pending);
+    int pending_mul = (t[i].op == OP_MUL && t[i].x_path);
     /* bump count by 1 if there's a MUL waiting for a load */
     if (pick < (count + pending_mul)) {
       op_t operand_type = OPERAND_IMM;
@@ -67,9 +71,9 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
           ; rewritten slightly for clarity
         @@save_arg:
           mov  al,0         ; immediate value
-          shr  bl,1         ; n.b. bx++ if pending mul
+          shr  bl,1         ; n.b. bx++ if x_path mul
           jnb  @@check_arg
-            or   cl,cl      ; z => pending mul (or last op mov)
+            or   cl,cl      ; z => x_path mul (or last op mov)
             jz @@try_ptr
           @@check_arg:
             or dl,dl        ; lower byte !0 can be used as-is
@@ -87,9 +91,9 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
 
       // we can use the pointer reg as the argument when we're
       // creating the loop
-      int is_right = ((count + pending_mul) % 2) == 1;
+      int is_right = ((i /* XXX j? */ + pending_mul) % 2) == 1;
       int is_val_zero = (r & 0xff) == 0;
-      op_t previous_op = (cur_op - 1)->op;
+      op_t previous_op = t[i - 1].op;
 
       if (is_val_zero ||
           (is_right && (previous_op == OPERAND_IMM || pending_mul))) {
@@ -102,8 +106,8 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
           r |= 1;
         }
       }
-      if (save_operand(cur_op, operand_type, r) == OPERAND_TARGET) {
-        target_loc = cur_op;
+      if (save_operand(t, i, operand_type, r) == OPERAND_TARGET) {
+        x = i;
       }
     } else {
       op_t new_op;
@@ -116,11 +120,11 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
 #endif
       new_op = (op_t[]){OP_SUB, OP_ADD, OP_XOR, OP_MUL, OP_ROL,  OP_ROR,
                         OP_SHL, OP_SHR, OP_OR,  OP_AND, OP_IMUL, OP_JNZ}
-          [((uint8_t)r % 12) >> !!cur_op->pending];
+          [((uint8_t)r % 12) >> !!t[i].x_path];
 
       // allocate our two arguments
-      cur_op->left = ++cur_arg;
-      cur_op->right = ++cur_arg;
+      set_left(t, i, ++j);
+      set_right(t, i, ++j);
 
       switch (new_op) {
       case OP_SUB:
@@ -128,25 +132,25 @@ op_node_t *make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask,
       case OP_XOR:
         // flip a coin!
         if (r % 2 == 1) {
-          cur_op->right->pending = cur_op->pending;
+          t[t[i].right].x_path = t[i].x_path;
           break;
         }
         // FALLTHROUGH
       default:
-        cur_op->left->pending = cur_op->pending;
+        t[t[i].left].x_path = t[i].x_path;
         break;
       }
 
-      cur_op->pending = 0;
-      cur_op->op = cur_op->left->op = cur_op->right->op = new_op;
+      t[i].x_path = 0;
+      t[i].op = t[t[i].left].op = t[t[i].right].op = new_op;
     }
   }
 
-  return target_loc;
+  return x;
 }
 
-int is_operand(const op_node_t *const n) {
-  switch (n->op) {
+int is_operand(const op_node_t *const t, int i) {
+  switch (t[i].op) {
   case OPERAND_IMM:
   case OPERAND_TARGET:
   case OPERAND_PTR:
@@ -157,58 +161,51 @@ int is_operand(const op_node_t *const n) {
 }
 
 // find (don't descend!)
-op_node_t *get_parent(op_node_t *const cur, op_node_t *const n) {
-  op_node_t *t;
+int get_parent(op_node_t *const t, int const n) {
+  int i;
 
-  // done: descended to ourself, or an operand
-  if (cur == n || cur->op < 3) {
-    return NULL;
+  for (i = 1 /* skip 0, it's the placeholder */; i < n; i++) {
+    if (is_operand(t, i)) {
+      continue;
+    }
+    if (t[i].left != n) {
+      continue;
+    }
+    return i;
   }
-
-  // if n is a child of cur, return
-  if (cur->left == n || cur->right == n) {
-    return cur;
-  }
-
-  // otherwise ascend
-  if ((t = get_parent(cur->left, n)) != NULL) {
-    return t;
-  }
-  if ((t = get_parent(cur->right, n)) != NULL) {
-    return t;
-  }
-
-  return NULL;
+  return 0;
 }
 
 // given a node with an `x`, invert the dependent ops, and return the new
 // root
-op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
-  op_node_t *child;
-  op_node_t *cur;
-  op_node_t *x_op;
-  op_node_t *parent;
+uint8_t invert_ops_tree(op_node_t *const root, int const n) {
+  int i;
+  int xi;
+  int childi;
+  int parenti;
 
   // walk from the current x upward
-  for ((x_op = cur = get_parent(root + 1, n)), child = n;
-       cur != NULL && cur != &root[0]; child = cur, cur = parent) {
+  for ((xi = i = get_parent(root, n)), childi = n; //
+       i != 0;                                     //
+       childi = i, i = parenti) {
 
     // if we reach the root, put our `x` back in
-    if ((parent = get_parent(root + 1, cur)) == NULL) {
-      parent = &root[0]; // use the placeholder at index 0
+    if ((parenti = get_parent(root, i)) == 0) {
+      parenti = 0; // use the placeholder at index 0
     }
 
+    op_node_t *cur = root + i;
     switch (cur->op) {
     case OP_MUL:
-      cur->right->operand = integer_inverse(cur->right->operand);
+      set_right_operand(root, i, integer_inverse(get_right_operand(root, i)));
       break;
     case OP_SUB:
-      if (cur->left == child)
+      if (cur->left == childi)
         cur->op = OP_ADD;
       break;
     case OP_ADD:
       cur->op = OP_SUB;
-      if (cur->right == child)
+      if (cur->right == childi)
         SWAP(cur->left, cur->right);
       break;
     case OP_ROL:
@@ -221,21 +218,63 @@ op_node_t *invert_ops_tree(op_node_t *const root, op_node_t *const n) {
       break;
     }
 
-    assert(cur->left == child || cur->right == child);
-    if (child == cur->left) {
-      cur->left = parent;
-    } else if (child == cur->right) {
-      cur->right = parent;
+    assert(cur->left == childi || cur->right == childi);
+    if (childi == cur->left) {
+      cur->left = parenti;
+    } else if (childi == cur->right) {
+      cur->right = parenti;
     }
   }
 
-  return x_op;
+  return xi;
+}
+
+int has_right_operand(op_node_t *t, int i) {
+  switch (t[t[i].right].op) {
+  case OPERAND_IMM:
+  case OPERAND_TARGET:
+  case OPERAND_PTR:
+    return 1;
+  default:
+    return 0;
+  }
+}
+uint32_t is_right_immediate(op_node_t *t, int i) {
+  return t[t[i].right].op == OPERAND_IMM && t[t[i].right].operand;
+}
+int has_left_operand(op_node_t *t, int i) {
+  switch (t[t[i].right].op) {
+  case OPERAND_IMM:
+  case OPERAND_TARGET:
+  case OPERAND_PTR:
+    return 1;
+  default:
+    return 0;
+  }
+}
+int is_left_immediate(op_node_t *t, int i) {
+  return t[t[i].left].op == OPERAND_IMM && t[t[i].left].operand;
+}
+void set_left(op_node_t *t, int i, uint8_t j) { t[i].left = j; }
+void set_right(op_node_t *t, int i, uint8_t j) { t[i].right = j; }
+void set_left_operand(op_node_t *t, int i, uint32_t operand) {
+  t[t[i].left].operand = operand;
+}
+uint32_t get_left_operand(op_node_t *t, int i) {
+  return t[t[i].left].operand;
+}
+void set_right_operand(op_node_t *t, int i, uint32_t operand) {
+  t[t[i].right].operand = operand;
+}
+uint32_t get_right_operand(op_node_t *t, int i) {
+  return t[t[i].right].operand;
 }
 
 // given x's parent
-int adjust_ptr_operand(op_node_t *parent) {
+int adjust_ptr_operand(op_node_t *t, int parent_idx) {
   uint32_t adj;
   int done = 0;
+  op_node_t *parent = t + parent_idx;
 
   if (parent->op != OP_ADD && parent->op != OP_SUB) {
     return 0;
@@ -243,20 +282,21 @@ int adjust_ptr_operand(op_node_t *parent) {
 
   // nb. lower byte zero is a special operand, don't adjust
   adj = (parent->op == OP_ADD) ? 4 : -4;
-  if (parent->right->op == OPERAND_IMM) {
-    adj += parent->right->operand;
+  uint32_t operand;
+  if ((operand = is_right_immediate(t, parent_idx)) != 0) {
+    adj += operand;
     if ((adj & 0xff) != 0) {
-      parent->right->operand = adj;
+      set_right_operand(t, parent_idx, adj);
       done--;
     }
   }
-  // XXX immediate operand on the left => sub?
+  // XXX immediate operand on the left implies sub?
   adj = 4;
-  if (parent->left->op == OPERAND_IMM) {
+  if ((operand = is_left_immediate(t, parent_idx)) != 0) {
     assert(parent->op == OP_SUB);
-    adj += parent->left->operand;
+    adj += operand;
     if ((adj & 0xff) != 0) {
-      parent->left->operand = adj;
+      set_left_operand(t, parent_idx, adj);
       done--;
     }
   }
