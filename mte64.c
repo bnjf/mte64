@@ -556,8 +556,10 @@ static void make_ops_table(enum mut_routine_size_t routine_size)
       cpu_state.c = 0; // from CMP AL,BL @L480
 
       SWAP(AX, DX);
+
       // because 12 isn't congruent to the wordsize, there's a very small
-      // bias towards 0..3 by 0.002%
+      // bias towards 0..3: there's a 1/256 higher chance.  whether this
+      // is intentional to skew away from ROL/ROR and IMUL/JNZ is unclear.
       AL = AL % 12;
 
       CH = CH & 0x80;
