@@ -757,7 +757,7 @@ static void invert_ops()
 
   get_op_loc();
   if (cpu_state.c) {
-    dump_ops_table();
+    //dump_ops_table();
     D("couldn't find a dependent of op_end_idx=%x, returning!\n", AL);
     return;
   }
@@ -946,10 +946,11 @@ static void fix_arg()
   SI = BX;
   DX += ops_args[BX]; // tally the args if we've got a reg init
 
-  if (DL != 0) {
-    // is the argument already 2?
+  if (DL == 0) {
+    // 0 is special
     return;
   }
+  //D("adjusting id=%u from %lx to %lx\n", BX, ops_args[BX], DX);
 
   ops_args[BX] = DX; // seg arg to 2
   CX--;
@@ -989,8 +990,8 @@ static uint32_t get_op_args(uint8_t i)
   assert(BX < 0x21);
   DH = ops[BX]; // current op = ops[op_idx]
   D("i=%x\n", i);
-  dump_all_regs();
-  dump_ops_table();
+  //dump_all_regs();
+  //dump_ops_table();
   assert(BX == i);
   assert(DH == ops[i]);
   assert(
@@ -2097,7 +2098,7 @@ static void emit_ops()
   }
   // }}}
 
-  // otherwise pick an available register {{{2
+  // otherwise pick an available register {{{
   // emit_ops::@@pick_reg
   AX = random();
   CX = 8; // 8 attempts
@@ -2811,12 +2812,25 @@ static void encrypt_target()
 
 mut_output* mut_engine(mut_input* f_in, mut_output* f_out)
 {
-#if DEBUG
-  test();
-#endif
   // in = f_in;
   // out = f_out;
   stackp = stack + STACK_SIZE - 1;
+
+  // XXX testing {{{
+  BP = 1;
+  junk_len_mask = 0xf;
+  int attempts = 0;
+  do {
+    make_ops_table(junk_len_mask);
+    invert_ops();
+    try_ptr_advance();
+    attempts++;
+    //if (CX != 0) { dump_ops_tree(op_idx, 1); }
+    printf("%lx\n", CX & 0xffff);
+  } while (attempts < 10000000); //while (CX == 0);
+  //dump_ops_tree(op_idx, 1);
+  exit(0);
+  // }}}
 
   // PUSH((uintptr_t)f_in->code / 16); // let's pretend it's a segment
   PUSH(0);
