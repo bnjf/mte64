@@ -28,15 +28,15 @@ static op_t save_operand(op_node_t *t, int i, op_t operand_type, uint32_t v) {
   cur_op->op = operand_type;
   cur_op->x_path = 0;
   cur_op->operand = v;
+  D("t[%u] = (%u,%u)\n", i, operand_type, v);
   return operand_type;
 }
 
 // if phase is 0, we're creating the memory load/stores
 uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
-
-  int i;     // operator
-  int j;     // operand
-  int x = 0; // where we've inserted `x`
+  int i; // operator
+  int j; // operand
+  int x; // where we've inserted `x`
 
   // mask must be 2^n-1
   if (((junk_mask + 1) & junk_mask) != 0) {
@@ -48,10 +48,11 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
   // current root
   t[1] = (op_node_t){.op = OPERAND_TARGET, .x_path = 1};
 
-  int count = 1; // nodes in the tree
-  for (i = j = 1; i <= j; i++) {
+  for (i = j = x = 1; i <= j; i++) {
     uint32_t r = rnd_get();
     uint32_t pick = rnd_get() & junk_mask;
+
+    D("i:%u j:%u\n", i, j);
 
     // commit an odd argument for MUL
     if (t[i].op == OP_MUL && !t[i].x_path) {
@@ -63,10 +64,11 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
 
     int pending_mul = (t[i].op == OP_MUL && t[i].x_path);
     /* bump count by 1 if there's a MUL waiting for a load */
-    if (pick < (count + pending_mul)) {
+    if (pick < (i + pending_mul)) {
       op_t operand_type = OPERAND_IMM;
 
       /**
+        {{{
         ```asm
           ; rewritten slightly for clarity
         @@save_arg:
@@ -87,6 +89,7 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
             mov al,2        ; in loop, can use ptr
         @@save_op_idx:
         ```
+        }}}
       */
 
       // we can use the pointer reg as the argument when we're
@@ -106,21 +109,28 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
           r |= 1;
         }
       }
+
+      // commit
       if (save_operand(t, i, operand_type, r) == OPERAND_TARGET) {
         x = i;
       }
     } else {
       op_t new_op;
 
-#ifndef ALLOW_BIAS
+#ifdef DEBIAS_OP_PICK
       // 16 = next pow 2
-      while (r > -(16 % 12)) {
+      // while (r > -(16 % 12)) {
+      // 256 - (256 % 12) equiv
+      while ((r & 0xff) > 252) {
         r = rnd_get();
       }
 #endif
-      new_op = (op_t[]){OP_SUB, OP_ADD, OP_XOR, OP_MUL, OP_ROL,  OP_ROR,
-                        OP_SHL, OP_SHR, OP_OR,  OP_AND, OP_IMUL, OP_JNZ}
-          [((uint8_t)r % 12) >> !!t[i].x_path];
+      new_op = (op_t[]){
+          // invertible
+          OP_SUB, OP_ADD, OP_XOR, OP_MUL, OP_ROL, OP_ROR,
+          // uninvertible (junk ops used if not on the x path)
+          OP_SHL, OP_SHR, OP_OR, OP_AND, OP_IMUL, OP_JNZ //
+      }[((uint8_t)r % 12) >> !!t[i].x_path];
 
       // allocate our two arguments
       set_left(t, i, ++j);
@@ -133,14 +143,16 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
         // flip a coin!
         if (r % 2 == 1) {
           t[t[i].right].x_path = t[i].x_path;
-          break;
+        } else {
+          t[t[i].left].x_path = t[i].x_path;
         }
-        // FALLTHROUGH
+        break;
       default:
         t[t[i].left].x_path = t[i].x_path;
         break;
       }
 
+      D("op = %u\n", new_op);
       t[i].x_path = 0;
       t[i].op = t[t[i].left].op = t[t[i].right].op = new_op;
     }
@@ -149,7 +161,7 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
   return x;
 }
 
-int is_operand(const op_node_t *const t, int i) {
+int is_operand(const op_node_t *const t, const int i) {
   switch (t[i].op) {
   case OPERAND_IMM:
   case OPERAND_TARGET:

@@ -25,6 +25,7 @@ int main(int argc, char *argv[]) {
     t = t0;
     t_x = make_ops_tree(t, 0xf, 1);
     for (int i = 0; i < 0x21; i++) {
+      D("%u == %u?\n", t[i].op, t_workn->ops[i]);
       assert(t[i].op == t_workn->ops[i]);
       if (t_workn->ops[i] < 3) {
         // check operand
@@ -35,9 +36,12 @@ int main(int argc, char *argv[]) {
         assert(t[i].operand % 0x10000 == t_workn->ops_args[i]);
       } else {
         // check op l/r
-        assert(t[t[i].left].op == t_workn->ops[t_workn->ops_args[i] & 0xff]);
-        assert(t[t[i].right].op ==
-               t_workn->ops[(t_workn->ops_args[i] >> 8) & 0xff]);
+        // assert(t[t[i].left].op == t_workn->ops[t_workn->ops_args[i] &
+        // 0xff]);
+        assert(t[i].left == (t_workn->ops_args[i] & 0xff));
+        // assert(t[t[i].right].op == t_workn->ops[(t_workn->ops_args[i] >> 8)
+        // & 0xff]);
+        assert(t[i].right == ((t_workn->ops_args[i] >> 8) & 0xff));
       }
     }
     // check tinv
@@ -54,10 +58,8 @@ int main(int argc, char *argv[]) {
         assert(t[i].operand % 0x10000 == t_workinvn->ops_args[i]);
       } else {
         // check op l/r
-        assert(t[t[i].left].op ==
-               t_workinvn->ops[t_workinvn->ops_args[i] & 0xff]);
-        assert(t[t[i].right].op ==
-               t_workinvn->ops[(t_workinvn->ops_args[i] >> 8) & 0xff]);
+        assert(t[i].left == (t_workinvn->ops_args[i] & 0xff));
+        assert(t[i].right == ((t_workinvn->ops_args[i] >> 8) & 0xff));
       }
     }
     assert(adjust_ptr_operand(t, t_x) == 0);

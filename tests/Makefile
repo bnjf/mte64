@@ -7,7 +7,7 @@ CFLAGS?=-g -DDEBUG \
 	-Wimplicit-fallthrough \
 	-pedantic-errors \
 	-O -march=native
-LDFLAGS?=-lefence
+LDFLAGS?=-lefence -g
 CPPFLAGS+=-I../ 
 
 compare_original_trees: compare_original_trees.o data/tree/t_work.o data/tree/t_workinv.o mock/rnd.o ../op_tree.o ../integer_inverse.o
@@ -38,7 +38,7 @@ testdata: data/tree/t_work.o data/tree/t_workinv.o
 
 data/tree/t_work.o data/tree/t_workinv.o:
 	$(MAKE) -C data/tree $(notdir $@)
-../op_tree.o ../integer_inverse.o:
+../op_tree.o ../integer_inverse.o: ../op_tree.c ../integer_inverse.c
 	$(MAKE) -C ../ $(notdir $@)
 
 clean:
