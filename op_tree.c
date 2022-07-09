@@ -100,13 +100,15 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
 
       if (is_val_zero ||
           (is_right && (previous_op == OPERAND_IMM || pending_mul))) {
+        r |= 1;
         if (phase == 0) {
-          operand_type = OPERAND_PTR; // can use ptr
+          // XXX
+          // operand_type = OPERAND_PTR; // can use ptr
         } else {
           // this serves two purposes:
           // - avoiding the lower byte being 0 (sentinel for reg move)
           // - if it's an argument for mul, ensures it's odd for inv
-          r |= 1;
+          operand_type = OPERAND_IMM; // can use ptr
         }
       }
 
@@ -180,7 +182,9 @@ int get_parent(op_node_t *const t, int const n) {
     if (is_operand(t, i)) {
       continue;
     }
-    if (t[i].left != n) {
+    // got an operator
+    // XXX left or right?
+    if (t[i].right != n) {
       continue;
     }
     return i;
@@ -196,41 +200,48 @@ uint8_t invert_ops_tree(op_node_t *const root, int const n) {
   int childi;
   int parenti;
 
+  D("get_parent(root=%p, n=%d) == %d\n", root, n, get_parent(root, n));
   // walk from the current x upward
   for ((xi = i = get_parent(root, n)), childi = n; //
-       i != 0;                                     //
+       /*n != 1 ||*/ i != 0;                       //
        childi = i, i = parenti) {
 
+    D("get_parent(root=%p, i=%d) == %d\n", root, i, get_parent(root, i));
     // if we reach the root, put our `x` back in
-    if ((parenti = get_parent(root, i)) == 0) {
+    if ((parenti = get_parent(root, i)) == 1) {
       parenti = 0; // use the placeholder at index 0
     }
 
+    // assert(0);
     op_node_t *cur = root + i;
+    op_t inv_op[] = {[OP_SUB] = OP_ADD,
+                     [OP_ADD] = OP_SUB,
+                     [OP_ROL] = OP_ROR,
+                     [OP_ROR] = OP_ROL,
+                     [OP_MUL] = OP_MUL};
     switch (cur->op) {
     case OP_MUL:
       set_right_operand(root, i, integer_inverse(get_right_operand(root, i)));
       break;
     case OP_SUB:
+      // if it's on the right we generate SUB+NEG
       if (cur->left == childi)
-        cur->op = OP_ADD;
+        cur->op = inv_op[cur->op];
       break;
     case OP_ADD:
-      cur->op = OP_SUB;
-      if (cur->right == childi)
+      cur->op = inv_op[cur->op];
+      if (cur->left != childi)
         SWAP(cur->left, cur->right);
       break;
     case OP_ROL:
-      cur->op = OP_ROR;
-      break;
     case OP_ROR:
-      cur->op = OP_ROL;
+      cur->op = inv_op[cur->op];
       break;
     default:
       break;
     }
 
-    assert(cur->left == childi || cur->right == childi);
+    // assert(cur->left == childi || cur->right == childi);
     if (childi == cur->left) {
       cur->left = parenti;
     } else if (childi == cur->right) {

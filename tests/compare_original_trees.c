@@ -23,7 +23,9 @@ int main(int argc, char *argv[]) {
 
     op_node_t *const t0 = (op_node_t *)calloc(0x21, sizeof(op_node_t));
     t = t0;
-    t_x = make_ops_tree(t, 0xf, 1);
+    t_x = make_ops_tree(t, 0xf, 0
+                        /* i can't remember whether the test data was bp=0*/
+    );
     for (int i = 0; i < 0x21; i++) {
       D("%u == %u?\n", t[i].op, t_workn->ops[i]);
       assert(t[i].op == t_workn->ops[i]);
@@ -46,7 +48,9 @@ int main(int argc, char *argv[]) {
     }
     // check tinv
     t = t0;
+    D("inverting... t_x:%d\n", t_x);
     t_x = invert_ops_tree(t0, t_x);
+    D("...inverted! t_x:%d\n", t_x);
     for (int i = 0; i < 0x21; i++) {
       assert(t[i].op == t_workinvn->ops[i]);
       if (t_workinvn->ops[i] < 3) {
@@ -58,6 +62,10 @@ int main(int argc, char *argv[]) {
         assert(t[i].operand % 0x10000 == t_workinvn->ops_args[i]);
       } else {
         // check op l/r
+        D("inv[%u]: left %u == %u?\n", i, t[i].left,
+          (t_workinvn->ops_args[i] & 0xff));
+        D("inv[%u]: right %u == %u?\n", i, t[i].right,
+          ((t_workinvn->ops_args[i] >> 8) & 0xff));
         assert(t[i].left == (t_workinvn->ops_args[i] & 0xff));
         assert(t[i].right == ((t_workinvn->ops_args[i] >> 8) & 0xff));
       }
