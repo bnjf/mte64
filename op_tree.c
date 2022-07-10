@@ -62,53 +62,50 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
       continue;
     }
 
-    int pending_mul = (t[i].op == OP_MUL && t[i].x_path);
+    int pending_mul_x = (t[i].op == OP_MUL && t[i].x_path);
     /* bump count by 1 if there's a MUL waiting for a load */
-    if (pick < (i + pending_mul)) {
+    if (pick < (i + pending_mul_x)) {
       op_t operand_type = OPERAND_IMM;
 
       /**
-        {{{
-        ```asm
-          ; rewritten slightly for clarity
-        @@save_arg:
-          mov  al,0         ; immediate value
-          shr  bl,1         ; n.b. bx++ if x_path mul
-          jnb  @@check_arg
-            or   cl,cl      ; z => x_path mul (or last op mov)
-            jz @@try_ptr
-          @@check_arg:
-            or dl,dl        ; lower byte !0 can be used as-is
-            jnz @@save_op_idx
-        @@try_ptr:
-          or bp,bp          ; creating loop?
-          jz @@use_ptr
-            or dl,1         ; ... we're not.  oddify.
-            jmp @@save_op_idx
-          @@use_ptr:
-            mov al,2        ; in loop, can use ptr
-        @@save_op_idx:
-        ```
-        }}}
+{{{ ```asm
+      ; rewritten slightly for clarity
+    @@save_arg:
+      mov  al,0         ; immediate value
+      shr  bl,1         ; n.b. bx++ if x_path mul
++--<  jnb  @@check_arg
+|       or   cl,cl      ; z => x_path mul (or last op mov)
+|+-<    jz @@try_ptr
++|->   @@check_arg:
+ |      or dl,dl        ; lower byte !0 can be used as-is
++|-<    jnz @@save_op_idx ; break
+|+->@@try_ptr:
+|     or bp,bp          ; creating loop?
+|+-<  jz @@use_ptr
+||      or dl,1         ; ... we're not.  oddify.
++--<    jmp @@save_op_idx ; break
+|+->  @@use_ptr:
+|       mov al,2        ; in loop, can use ptr
++-->@@save_op_idx:
+```
+}}}
       */
 
       // we can use the pointer reg as the argument when we're
       // creating the loop
-      int is_right = ((i /* XXX j? */ + pending_mul) % 2) == 1;
+      int is_right = ((i + pending_mul_x) % 2) == 1;
       int is_val_zero = (r & 0xff) == 0;
       op_t previous_op = t[i - 1].op;
 
       if (is_val_zero ||
-          (is_right && (previous_op == OPERAND_IMM || pending_mul))) {
-        r |= 1;
-        if (phase == 0) {
-          // XXX
-          // operand_type = OPERAND_PTR; // can use ptr
+          (is_right && (previous_op == OPERAND_IMM || pending_mul_x))) {
+        if (phase != 0) {
+          operand_type = OPERAND_PTR; // can use ptr
         } else {
           // this serves two purposes:
           // - avoiding the lower byte being 0 (sentinel for reg move)
           // - if it's an argument for mul, ensures it's odd for inv
-          operand_type = OPERAND_IMM; // can use ptr
+          r |= 1;
         }
       }
 
@@ -174,7 +171,7 @@ int is_operand(const op_node_t *const t, const int i) {
   }
 }
 
-// find (don't descend!)
+// find
 int get_parent(op_node_t *const t, int const n) {
   int i;
 
