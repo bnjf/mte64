@@ -70,7 +70,8 @@ int main(int argc, char *argv[]) {
         assert(t[i].right == ((t_workinvn->ops_args[i] >> 8) & 0xff));
       }
     }
-    assert(adjust_ptr_operand(t, t_x) == 0);
+    int pto_ret = adjust_ptr_operand(t, t_x);
+    assert(pto_ret == 0 || pto_ret == -1);
     free(t0);
   }
   printf("\nok\n");

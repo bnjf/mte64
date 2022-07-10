@@ -183,11 +183,9 @@ int get_parent(op_node_t *const t, int const n) {
       continue;
     }
     // got an operator
-    // XXX left or right?
-    if (t[i].right != n) {
-      continue;
+    if (t[i].left == n || t[i].right == n) {
+      return i;
     }
-    return i;
   }
   return 0;
 }
@@ -200,17 +198,20 @@ uint8_t invert_ops_tree(op_node_t *const root, int const n) {
   int childi;
   int parenti;
 
-  D("get_parent(root=%p, n=%d) == %d\n", root, n, get_parent(root, n));
+  D("get_parent(root=%p, n=%d) == %d\n", (void *)root, n,
+    get_parent(root, n));
   // walk from the current x upward
   for ((xi = i = get_parent(root, n)), childi = n; //
        /*n != 1 ||*/ i != 0;                       //
        childi = i, i = parenti) {
 
-    D("get_parent(root=%p, i=%d) == %d\n", root, i, get_parent(root, i));
+    parenti = get_parent(root, i);
+    D("get_parent(root=%p, i=%d) == %d\n", (void *)root, i, parenti);
     // if we reach the root, put our `x` back in
-    if ((parenti = get_parent(root, i)) == 1) {
-      parenti = 0; // use the placeholder at index 0
-    }
+    // if ((parenti = get_parent(root, i)) == 1) {
+    //   D("head!\n");
+    //   // parenti = -1; // use the placeholder at index 0
+    // }
 
     // assert(0);
     op_node_t *cur = root + i;
@@ -241,10 +242,12 @@ uint8_t invert_ops_tree(op_node_t *const root, int const n) {
       break;
     }
 
-    // assert(cur->left == childi || cur->right == childi);
+    assert(cur->left == childi || cur->right == childi);
     if (childi == cur->left) {
+      D("setting cur->left:%d to %d\n", cur->left, parenti);
       cur->left = parenti;
     } else if (childi == cur->right) {
+      D("setting cur->right:%d to %d\n", cur->right, parenti);
       cur->right = parenti;
     }
   }
