@@ -99,7 +99,7 @@ uint8_t make_ops_tree(op_node_t *t, mut_routine_size_t junk_mask, int phase) {
 
       if (is_val_zero ||
           (is_right && (previous_op == OPERAND_IMM || pending_mul_x))) {
-        if (phase != 0) {
+        if (phase == 0) {
           operand_type = OPERAND_PTR; // can use ptr
         } else {
           // this serves two purposes:
