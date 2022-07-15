@@ -263,7 +263,10 @@ int has_right_operand(op_node_t *t, int i) {
   }
 }
 uint32_t is_right_immediate(op_node_t *t, int i) {
-  return t[t[i].right].op == OPERAND_IMM && t[t[i].right].operand;
+  if (t[t[i].right].op == OPERAND_IMM && (get_right_operand(t,i)&0xff) != 0) {
+    return get_right_operand(t,i);
+  }
+  return 0;
 }
 int has_left_operand(op_node_t *t, int i) {
   switch (t[t[i].right].op) {
@@ -276,7 +279,10 @@ int has_left_operand(op_node_t *t, int i) {
   }
 }
 int is_left_immediate(op_node_t *t, int i) {
-  return t[t[i].left].op == OPERAND_IMM && t[t[i].left].operand;
+  if (t[t[i].left].op == OPERAND_IMM && (get_left_operand(t,i)&0xff)!=0) {
+    return get_left_operand(t,i);
+  }
+  return 0;
 }
 void set_left(op_node_t *t, int i, uint8_t j) { t[i].left = j; }
 void set_right(op_node_t *t, int i, uint8_t j) { t[i].right = j; }
@@ -296,7 +302,6 @@ uint32_t get_right_operand(op_node_t *t, int i) {
 // given x's parent
 int adjust_ptr_operand(op_node_t *t, int parent_idx) {
   uint32_t adj;
-  int done = 0;
   op_node_t *parent = t + parent_idx;
 
   if (parent->op != OP_ADD && parent->op != OP_SUB) {
@@ -310,9 +315,10 @@ int adjust_ptr_operand(op_node_t *t, int parent_idx) {
     adj += operand;
     if ((adj & 0xff) != 0) {
       set_right_operand(t, parent_idx, adj);
-      done--;
+      return -1;
     }
   }
+
   // XXX immediate operand on the left implies sub?
   adj = 4;
   if ((operand = is_left_immediate(t, parent_idx)) != 0) {
@@ -320,11 +326,11 @@ int adjust_ptr_operand(op_node_t *t, int parent_idx) {
     adj += operand;
     if ((adj & 0xff) != 0) {
       set_left_operand(t, parent_idx, adj);
-      done--;
+      return -1;
     }
   }
 
-  return done;
+  return 0;
 }
 
 // vim:set commentstring=//\ %s:

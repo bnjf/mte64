@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "mut_work16.h"
 
@@ -44,6 +45,7 @@ int main(int argc, char *argv[]) {
         assert(t[i].right == ((t_workn->ops_args[i] >> 8) & 0xff));
       }
     }
+
     // check tinv
     t = t0;
     D("inverting... t_x:%d\n", t_x);
@@ -68,9 +70,28 @@ int main(int argc, char *argv[]) {
         assert(t[i].right == ((t_workinvn->ops_args[i] >> 8) & 0xff));
       }
     }
-    int pto_ret = adjust_ptr_operand(t, t_x);
-    assert(pto_ret == 0 || pto_ret == -1);
+
+    // check for pointer reg adjustment
+    op_node_t *const t_apo = (op_node_t *)calloc(0x21, sizeof(op_node_t));
+    memcpy(t_apo, t, 0x21*sizeof(op_node_t));
+    int apo_ret = adjust_ptr_operand(t_apo, t_x);
+    assert(apo_ret == 0 || apo_ret == -1);
+    for (int i = 0; i< 0x21; i++) {
+      assert(t[i].op == t_apo[i].op);
+      if (t[i].op == 0) {
+        assert(t[i].operand == t_apo[i].operand || 
+          t[i].operand + 4 == t_apo[i].operand || 
+          t[i].operand - 4 == t_apo[i].operand);
+        if (t[i].operand != t_apo[i].operand) {
+          D("apo[%u]: op:%d operand:%u->%u\n", i, t[i].op, t[i].operand, t_apo[i].operand);
+        }
+      } else {
+        assert(t[i].operand == t_apo[i].operand);
+      }
+    }
+
     free(t0);
+    free(t_apo);
   }
   printf("\nok\n");
   exit(0);
