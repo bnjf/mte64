@@ -6,23 +6,22 @@ use v5.10;
 
 my $x   = 0;
 my %lut = (
-
-    #0  => "", 1  => "", 2  => "",
-    3  => "-",
-    4  => "+",
+    3  => "sub",
+    4  => "add",
     5  => "xor",
-    6  => "*",
+    6  => "mul",
     7  => "rol",
     8  => "ror",
     9  => "shl",
     10 => "shr",
     11 => "or",
     12 => "and",
-    13 => "s*",
+    13 => "imul",
     14 => "jnz",
 );
-
 my $alloc = 1;
+
+my @stats = ();
 
 sub walk {
     my $i      = shift;
@@ -32,19 +31,18 @@ sub walk {
 
     if ( $ops[$i] < 3 ) {
         die if $ops[$i] == 0 && ( $args16[$i] & 0xff ) == 0;
-        say "  n$i [label=\"_"
-            . (
-            $ops[$i] eq 0
-            ? ( "r" . $alloc++ )
-            : ("r0")
-            ) . "=$args16[$i]\"]";
+
+        say "  n$i [label=\""
+            . ( $ops[$i] == 0 ? $args16[$i] : ( "r" . ( $ops[$i] - 1 ) ) )
+            . "\"]";
+
     }
     else {
+        walk( $args8[ $i * 2 ],     \@ops, \@args8, \@args16 );
+        walk( $args8[ $i * 2 + 1 ], \@ops, \@args8, \@args16 );
         say "  n$i [label=\""
             . $lut{ $ops[$i] }
             . "\"]; n$i -> { n$args8[$i*2] n$args8[$i*2+1] }";
-        walk( $args8[ $i * 2 ],     \@ops, \@args8, \@args16 );
-        walk( $args8[ $i * 2 + 1 ], \@ops, \@args8, \@args16 );
     }
 }
 
@@ -56,11 +54,12 @@ while ( read( STDIN, my $buf, 1369 ) == 1369 ) {
     @w = unpack( "C33 v33", $buf );
     my @args16 = @w[ 33 .. 65 ];
 
-    #say "ops: @ops"; say "args: @args"
     say "digraph ops_$x {";
-    say "  rankdir=LR;";
+
+    say "  rankdir=\"LR\";";
     walk( 1, \@ops, \@args8, \@args16 );
     say "}";
 
+    $alloc = 1;
     $x++;
 }
