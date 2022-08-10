@@ -10,7 +10,7 @@ uint32_t rnd_get() { return random(); }
 uint32_t rnd_range(uint32_t n) {
   uint32_t x, r;
   do {
-    x = rnd();
+    x = rnd_get();
     r = x % n;
   } while (x - r > (-n));
   return r;

@@ -6,8 +6,7 @@
 
 #include "mte64.h"
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
   mut_input in;
   mut_output out;
 
@@ -38,8 +37,12 @@ int main(int argc, char *argv[])
 #if DUMP_PAYLOAD
     char fn[] = "payload.XXXXXXXX";
     int fd = mkstemp(fn);
-    if (fd < 0) { abort(); }
-    if (write(fd, out.code, out.len) < out.len) { abort(); }
+    if (fd < 0) {
+      abort();
+    }
+    if (write(fd, out.code, out.len) < out.len) {
+      abort();
+    }
     close(fd);
 #endif
   }

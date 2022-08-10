@@ -461,8 +461,8 @@ static void make_ops_table(enum mut_routine_size_t routine_size) {
       return;
     }
 
-    DX = rnd();
-    AX = rnd();
+    DX = rnd_get();
+    AX = rnd_get();
 
     SI = BX = op_next_idx;
 
@@ -659,7 +659,7 @@ static void dump_ops_table_as_dot() {
   id++;
 }
 
-static void dump_ops_tree_as_dot(op_node_t *t, FILE *f) {
+static void dump_ops_tree_as_dot(op_node_t *t, int i, FILE *f) {
   static int sub_id = 0;
   static int node_id = 0;
   static int count = 0;
@@ -681,15 +681,15 @@ static void dump_ops_tree_as_dot(op_node_t *t, FILE *f) {
     fprintf(f, "%c_%p [label=\"%s\"]; ",
             // this
             'a' + node_id, (void *)t, op_to_str[t->op]);
-    dump_ops_tree_as_dot(t->left, f);
-    dump_ops_tree_as_dot(t->right, f);
-    fprintf(f, "%c_%p -> { %c_%p %c_%p }; ",
+    dump_ops_tree_as_dot(t, t->left, f);
+    dump_ops_tree_as_dot(t, t->right, f);
+    fprintf(f, "%c_%u -> { %c_%u %c_%u }; ",
             // this
-            'a' + node_id, (void *)t,
+            'a' + node_id, i,
             // left
-            'a' + node_id, (void *)t->left,
+            'a' + node_id, t->left,
             // right
-            'a' + node_id, (void *)t->right);
+            'a' + node_id, t->right);
   }
   if (sub_id-- == 3) {
     fprintf(f, "}\n");
@@ -1106,27 +1106,54 @@ static uint32_t get_op_args(uint8_t i) {
     reg_set_dec[REG_DX] = 0;
     D("reserved DX\n");
   }
-  // DH range is [6,10]: mul, rol, ror, shl, shr
-  else if (DH < 5) {
-    // no junk ops (11, 12, 13, 14)
-    if (DL != 0 ||
-        // need cx for op on reg
-        (is_8086 != 0 &&
-         // op [3,13]?
-         (((AL = ((AL - 0xe) & 0xf)) >= 5 ||
-           // jnz
-           (AL < 2 && DH >= 3))))) {
-      // >>> [(x,(x+0xd-7-0xe)&0xf) for x in range(15)]
-      //  [(0, 8), (1, 9), (2, 10), (3, 11), (4, 12), (5, 13), (6, 14), (7,
-      //  15), (8, 0), (9, 1), (10, 2), (11, 3), (12, 4), (13, 5), (14, 6)]
+  // check if DH range is [6,10]: mul, rol, ror, shl, shr
+  //
+  // the original code is:
+  //   DH=x-6
+  //   CMP DH,5
+  //   JNC @exit
+  //
+  // so, reading the CMP as a non-destructive SUB, we'd only have carry set if
+  // we satisfy 0≤DH<5.  that, adjusted, is [6,10].
+  //
+  // but we picked up the 0 in the previous block when checking for
+  // imul/mul, so it's really just rotates and shifts we're interested in.
+  //
+  // TLDR: is DH in (ROL,ROR,SHL,SHR)?
+  else if (DH > 0 && DH < 5) {
 
+    if (DL != 0) {
+      // we're not attached to an OPERAND_IMM, need cx for op on reg
       D("reserved CX\n");
-      reg_set_dec[REG_CX] = BH; // mark cx used
-      DL = 0x80;                // pending cx
+      reg_set_dec[REG_CX] = BH;
+      DL = 0x80;
+    } else if (is_8086 != 0) {
+      // OPERAND_IMM as the other argument
+      // and we can't generate rol/ror/shl/shr x,imm8
+      /* if ( */
+      /*     // >>> [(al-0xe)&0xf for al in range(15)] */
+      /*     // [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0] */
+      /*     (AL = ((AL - 0xe) & 0xf)) >= 5 // [3,13]: all ops except jnz */
+      uint8_t op = AL;
+      AL = ((AL - 0xe) & 0xf);
+      if (op >= 3 && op <= 13) {
+        // not an operand, not jnz
+        D("reserved CX\n");
+        reg_set_dec[REG_CX] = BH; // mark cx used
+        DL = 0x80;                // pending cx
+      }
+      // adjusted, we hit AL=[14]=OP_JNZ here (and [15], but that
+      // doesn't exist) and DH=[3,4] (8 and 9 adjusted) which is
+      // SHL/SHR
+      if (op == OP_JNZ && (DH == 3 || DH == 4)) {
+        D("reserved CX\n");
+        reg_set_dec[REG_CX] = BH; // mark cx used
+        DL = 0x80;                // pending cx
+      }
     }
   }
-  // done, mark op as reg required
   assert(BX < 0x21);
+  // done, mark op as reg required
   ops[BX] = DL = ((CL | DL) & 0x80) | ops[BX];
 
   STACK_INFO(__func__);
@@ -1423,7 +1450,7 @@ static void exec_enc_stage() {
         // BX == 1 here?
         while (DX) {
           D("trashing dx=%lx bytes\n", DX);
-          AX = rnd();
+          AX = rnd_get();
 #undef OP_JNZ_JUNK
 #ifdef OP_JNZ_JUNK
           *(uint8_t *)(SI++) = AL;
@@ -1732,7 +1759,7 @@ static void g_code_from_ops() {
         } else {
           // @@do_end_of_loop
           // emit the store, doesn't matter if we MOV or XCHG
-          AX = rnd();
+          AX = rnd_get();
           AL = 0x87 + (AL & 2);
           // AL = 0x89;
           SWAP(AX, BX);
@@ -2186,7 +2213,7 @@ static void emit_ops() {
 
   // otherwise pick an available register {{{
   // emit_ops::@@pick_reg
-  AX = rnd();
+  AX = rnd_get();
   CX = 8; // 8 attempts
   do {
     emitb(DH | 0x50); // PUSH
@@ -2758,7 +2785,7 @@ static void mark_and_emit(uint8_t *p) {
   DI++;
 }
 static void pick_ptr_register(uint8_t *p) {
-  AX = rnd() & 3;
+  AX = rnd_get() & 3;
   if (AL == 0) {
     AL = 7;
   }
@@ -2769,7 +2796,7 @@ static void pick_ptr_register(uint8_t *p) {
 }
 static void ptr_and_r_sto() {
   pick_ptr_register(&ptr_reg);
-  AX = rnd() & 7;
+  AX = rnd_get() & 7;
   if (AL == 0) {
     // data reg = immediate
     mark_and_emit(&data_reg);
@@ -2898,6 +2925,7 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
   stackp = stack + STACK_SIZE - 1;
 
   // XXX testing {{{
+#if 0
   BP = 0;
   junk_len_mask = 0xf;
   do {
@@ -2908,6 +2936,7 @@ mut_output *mut_engine(mut_input *f_in, mut_output *f_out) {
     try_ptr_advance();
   } while (CX == 0);
   exit(0);
+#endif
   // }}}
 
   // PUSH((uintptr_t)f_in->code / 16); // let's pretend it's a segment
